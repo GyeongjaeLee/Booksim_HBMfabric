@@ -109,7 +109,7 @@ SCENARIOS = [
     # ──────────────────────────────────────────────────────────
     {
         "label": "Fabric",
-        "routing_function": "hybrid",       # UGAL adaptive (default for fabric)
+        "routing_function": "ugal",       # UGAL adaptive (default for fabric)
         "is_fabric": 1,
         "matrix_prefix": "moe_matrix_baseline",
     },
@@ -119,13 +119,13 @@ SCENARIOS = [
     # ──────────────────────────────────────────────────────────
     {
         "label": "Offloading",
-        "routing_function": "hybrid",       # UGAL adaptive (default for fabric)
+        "routing_function": "ugal",       # UGAL adaptive (default for fabric)
         "is_fabric": 1,
         "matrix_prefix": "moe_matrix_H2H",
     },
 ]
 
-BASE_CONFIG = "./src/examples/hbmnet_accelsim_config"
+BASE_CONFIG = "./src/examples/hbmnet_config"
 MATRIX_DIR = "./src/examples/end-to-end/"
 RESULT_DIR = "./results-test"
 
