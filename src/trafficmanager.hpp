@@ -264,7 +264,7 @@ protected:
 
   virtual void _RetireFlit( Flit *f, int dest );
 
-  void _Inject();
+  virtual void _Inject();
   void _Step( );
 
   bool _PacketsOutstanding( ) const;

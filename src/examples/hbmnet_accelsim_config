@@ -1,0 +1,72 @@
+// AccelSim HBMNet Topology
+// Models L2-HBM path: hit (Xbar→HBM) vs miss (Xbar→MC→HBM)
+topology = hbmnet_accelsim;
+
+// Hardware: 148 SMs, 256 L2 slices, 8 HBM stacks
+num_sms = 148;
+num_l2_slices = 256;
+num_hbm_stacks = 8;
+l2_interleave = 0;
+
+// Routing
+// All routing functions decide hit/miss at injection based on baseline_ratio (hit rate).
+// Hit flits: Xbar → HBM (direct)
+// Miss flits: Xbar → MC → (MC fabric if available) → HBM
+routing_function = hybrid;
+
+is_fabric = 1;
+ugal_threshold = 50;
+ugal_intm_select = 0;
+
+// Hit rate: fraction of flits that take the hit path (Xbar→HBM direct)
+// 0.0 = all miss (all go through MC), 1.0 = all hit (no MC involvement)
+baseline_ratio = 0.5;
+// Miss routing sub-function for hybrid: baseline/min_adaptive/ugal/valiant/min_oblivious
+hybrid_routing = ugal;
+
+inject_latency = 50;
+eject_latency = 50;
+
+// Link latencies (cycles)
+xbar_xbar_latency = 185;
+xbar_hbm_latency = 10;    // hit path: Xbar ↔ HBM
+xbar_mc_latency = 160;      // miss path: Xbar ↔ MC
+mc_hbm_latency = 10;      // miss path: MC ↔ HBM (models DRAM access)
+mc_mc_latency = 160;         // miss path fabric: MC ↔ MC
+
+// Link bandwidths (parallel ports per link pair)
+xbar_xbar_bandwidth = 70;
+xbar_hbm_bandwidth = 14;   // hit path
+xbar_mc_bandwidth = 14;    // miss path entry
+mc_hbm_bandwidth = 14;     // equal xbar_hbm_bandwidth for fairness
+mc_mc_bandwidth = 14;       // fabric
+
+// Flow control
+num_vcs     = 4;
+vc_buf_size = 256;
+wait_for_tail_credit = 0;
+
+// Router architecture
+vc_allocator = islip;
+sw_allocator = islip;
+alloc_iters  = 1;
+
+credit_delay   = 0;
+routing_delay  = 0;
+vc_alloc_delay = 1;
+sw_alloc_delay = 1;
+
+input_speedup     = 1;
+output_speedup    = 1;
+internal_speedup  = 2.0;
+
+// Traffic
+traffic = uniform;
+packet_size = 1;
+
+// Simulation
+sim_type = moe_accelsim;
+injection_rate = 0.01;
+
+flit_width_bytes = 40;
+traffic_matrix_file = ./examples/end-to-end/moe_matrix_H2H_k16_128MiB;
