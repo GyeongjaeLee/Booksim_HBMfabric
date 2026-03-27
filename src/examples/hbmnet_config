@@ -27,15 +27,15 @@ ugal_intm_select = 0;
 // Hybrid routing: baseline_ratio fraction uses baseline tree routing,
 // the rest uses hybrid_routing (min_adaptive/ugal/valiant/min_oblivious). Requires is_fabric=1.
 baseline_ratio = 0.5;
-hybrid_routing = ugal;
+hybrid_routing = min_adaptive;
 
 inject_latency = 50;
 eject_latency = 50;
 
 // Link latencies (cycles)
 xbar_xbar_latency = 185;
-xbar_hbm_latency = 170;
-hbm_hbm_latency = 170;
+xbar_hbm_latency = 10;
+hbm_hbm_latency = 10;
 
 // Link bandwidths (number of parallel ports per link pair)
 xbar_xbar_bandwidth = 70;
@@ -44,7 +44,7 @@ hbm_hbm_bandwidth = 14;
 
 // Flow control
 num_vcs     = 4;
-vc_buf_size = 256;
+vc_buf_size = 512;
 wait_for_tail_credit = 0;
 
 // Router architecture
