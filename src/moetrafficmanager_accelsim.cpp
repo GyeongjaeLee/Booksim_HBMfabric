@@ -36,21 +36,24 @@ struct AccelNodeRange {
 static bool _AccelIsValidName(const string &name)
 {
   if (name.size() >= 4 && name.substr(0,4) == "Xbar") return true;
+  if (name.size() >= 4 && name.substr(0,4) == "Core") return true;  // moe-GPU-HBM: Core{N} = Xbar{N}
   if (name.size() >= 3 && name.substr(0,3) == "HBM")  return true;
-  if (name.size() >= 3 && name.substr(0,2) == "SM")   return true;
+  if (name.size() >= 2 && name.substr(0,2) == "SM")   return true;
   if (name.size() >= 2 && name.substr(0,2) == "L2")   return true;
   return false;
 }
 
 // Map a traffic-matrix name to a (first_node, count) range.
-//   "SM{i}"         -> (i, 1)
-//   "L2_{i}"/"L2{i}"-> (num_sms + i, 1)
-//   "Xbar{p}"       -> (RouterFirstNode[p], RouterConc[p])
-//   "HBM{h}"        -> (RouterFirstNode[K+2+h], RouterConc[K+2+h])
+//   "SM{i}"          -> (i, 1)
+//   "L2_{i}"/"L2{i}" -> (num_sms + i, 1)
+//   "Xbar{p}"        -> (RouterFirstNode[p], RouterConc[p])
+//   "Core{p}"        -> same as Xbar{p}  (moe-GPU-HBM format alias)
+//   "HBM{h}"         -> (RouterFirstNode[P+K+h], RouterConc[P+K+h])
 static AccelNodeRange _AccelParseNodeRange(const string &name, int num_routers, int total_nodes)
 {
   AccelNodeRange bad = {-1, 0};
   int K = gHBMNetAccelK;
+  int P = gHBMNetAccelP;
 
   if (name.size() >= 2 && name.substr(0,2) == "SM") {
     int i = atoi(name.substr(2).c_str());
@@ -59,7 +62,7 @@ static AccelNodeRange _AccelParseNodeRange(const string &name, int num_routers, 
   }
   if (name.size() >= 2 && name.substr(0,2) == "L2") {
     // num_sms = first node of HBM router 0
-    int num_sms = (num_routers > 2 + K) ? gHBMNetAccelRouterFirstNode[2 + K] : 0;
+    int num_sms = (num_routers > P + K) ? gHBMNetAccelRouterFirstNode[P + K] : 0;
     string rest = name.substr(2);
     if (!rest.empty() && rest[0] == '_') rest = rest.substr(1);
     int i = atoi(rest.c_str());
@@ -67,14 +70,16 @@ static AccelNodeRange _AccelParseNodeRange(const string &name, int num_routers, 
     if (node < 0 || node >= total_nodes) return bad;
     return {node, 1};
   }
-  if (name.size() >= 4 && name.substr(0,4) == "Xbar") {
+  // Xbar{p} and Core{p} (moe-GPU-HBM alias) both map to Xbar router p's SM nodes
+  if ((name.size() >= 4 && name.substr(0,4) == "Xbar") ||
+      (name.size() >= 4 && name.substr(0,4) == "Core")) {
     int p = atoi(name.substr(4).c_str());
     if (p < 0 || p >= num_routers) return bad;
     return {gHBMNetAccelRouterFirstNode[p], gHBMNetAccelRouterConc[p]};
   }
   if (name.size() >= 3 && name.substr(0,3) == "HBM") {
     int h = atoi(name.substr(3).c_str());
-    int rid = h + 2 + K;  // HBM routers start at K+2
+    int rid = P + K + h;  // HBM routers start at P+K
     if (rid < 0 || rid >= num_routers) return bad;
     return {gHBMNetAccelRouterFirstNode[rid], gHBMNetAccelRouterConc[rid]};
   }
@@ -124,9 +129,13 @@ void MoETrafficManagerAccelSim::_LoadTrafficMatrix(const Configuration &config)
 
     cout << "MoEAccelSim: Read " << lines.size() << " lines from " << matrix_file << endl;
 
-    // Find header row
+    // Find header row.
+    // Also record the actual token index of each valid column (col_token_idx),
+    // because some formats (moe-GPU-HBM) have skipped columns before the first
+    // valid name, so we cannot assume column c is at tokens[c+1].
     int header_row = -1;
     vector<string> col_names;
+    vector<int> col_token_idx;  // actual token index in data rows for each col
     for (size_t r = 0; r < lines.size(); ++r) {
       vector<string> tokens = _AccelSplitTabs(lines[r]);
       bool found = false;
@@ -135,8 +144,12 @@ void MoETrafficManagerAccelSim::_LoadTrafficMatrix(const Configuration &config)
       }
       if (found) {
         header_row = (int)r;
-        for (size_t t = 1; t < tokens.size(); ++t)
-          if (_AccelIsValidName(tokens[t])) col_names.push_back(tokens[t]);
+        for (size_t t = 1; t < tokens.size(); ++t) {
+          if (_AccelIsValidName(tokens[t])) {
+            col_names.push_back(tokens[t]);
+            col_token_idx.push_back((int)t);  // remember actual position
+          }
+        }
         break;
       }
     }
@@ -156,7 +169,8 @@ void MoETrafficManagerAccelSim::_LoadTrafficMatrix(const Configuration &config)
     for (size_t i = 0; i < col_names.size(); ++i) {
       AccelNodeRange nr = _AccelParseNodeRange(col_names[i], num_routers, _nodes);
       cout << "MoEAccelSim:   Column '" << col_names[i]
-           << "' -> first=" << nr.first << " count=" << nr.count << endl;
+           << "' (token " << col_token_idx[i] << ")"
+           << " -> first=" << nr.first << " count=" << nr.count << endl;
       assert(nr.first >= 0 && nr.first + nr.count <= _nodes);
       col_ranges.push_back(nr);
     }
@@ -184,9 +198,10 @@ void MoETrafficManagerAccelSim::_LoadTrafficMatrix(const Configuration &config)
       cout << "MoEAccelSim:   Row '" << row_name
            << "' (first=" << src.first << " count=" << src.count << "): ";
 
-      int num_vals = min((int)col_ranges.size(), (int)tokens.size() - 1);
-      for (int c = 0; c < num_vals; ++c) {
-        double mb = atof(tokens[c + 1].c_str());
+      for (size_t c = 0; c < col_ranges.size(); ++c) {
+        int tidx = col_token_idx[c];  // actual token index, not c+1
+        if (tidx >= (int)tokens.size()) continue;
+        double mb = atof(tokens[tidx].c_str());
         if (mb <= 0.0) continue;
 
         AccelNodeRange dst = col_ranges[c];
@@ -416,6 +431,8 @@ bool MoETrafficManagerAccelSim::_SingleSim()
     cout << "  Escape VC usage = " << gAccelEscapeVCEjects << " / " << gAccelTotalEjects
          << "  (" << pct << "%)" << endl;
   }
+  // Link utilization and near-min stats
+  hbmnet_accelsim_print_link_stats();
   cout << "======================================" << endl;
 
   // === Per-router traffic analysis ===
