@@ -173,6 +173,8 @@ TrafficPattern * TrafficPattern::New(string const & pattern, int nodes,
     } else if(pattern_name == "badperm_yarc") {
       result = new BadPermYarcTrafficPattern(nodes, k, n, xr);
     }
+  } else if(pattern_name == "gpu") {
+    result = new GPUTrafficPattern(nodes, config);
   } else if(pattern_name == "hotspot") {
     if(params.empty()) {
       params.push_back("-1");
@@ -389,6 +391,27 @@ int UniformRandomTrafficPattern::dest(int source)
   return RandomInt(_nodes - 1);
 }
 
+SMtoL2TrafficPattern::SMtoL2TrafficPattern(int nodes, int num_sms, int num_l2)
+  : RandomTrafficPattern(nodes), _num_sms(num_sms), _num_l2(num_l2)
+{
+  assert(num_sms + num_l2 == nodes);
+}
+
+int SMtoL2TrafficPattern::dest(int source)
+{
+  assert((source >= 0) && (source < _nodes));
+  if (source < _num_sms) {
+    // SM node: send to random L2 node
+    return RandomInt(_num_l2 - 1) + _num_sms;
+  } else {
+    // L2 node: send to random SM node
+    return RandomInt(_num_sms - 1);
+  }
+  // SM nodes: [0, _num_sms - 1]
+  // L2 nodes: [_num_sms, _num_sms + _num_l2 - 1]
+  return _num_sms + RandomInt(_num_l2 - 1);
+}
+
 UniformBackgroundTrafficPattern::UniformBackgroundTrafficPattern(int nodes, vector<int> excluded_nodes)
   : RandomTrafficPattern(nodes)
 {
@@ -523,4 +546,22 @@ int HotSpotTrafficPattern::dest(int source)
   }
   assert(_rates.back() > pct);
   return _hotspots.back();
+}
+
+// GPU Traffic Pattern: SM nodes send requests to L2 slices only
+GPUTrafficPattern::GPUTrafficPattern(int nodes, Configuration const * const config)
+   : TrafficPattern(nodes)
+{
+  _num_sms = config->GetInt("num_sms");
+  _num_l2_slices = config->GetInt("num_l2_slices");
+}
+
+int GPUTrafficPattern::dest(int source)
+{
+    // If source is an L2 slice, no requests are generated
+    if (source >= _num_sms) {
+      return -1; // Special value to indicate no request
+    }
+    
+    return _num_sms + RandomInt(_num_l2_slices - 1);
 }

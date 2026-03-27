@@ -160,6 +160,15 @@ public:
   virtual int dest(int source);
 };
 
+class SMtoL2TrafficPattern : public RandomTrafficPattern {
+private:
+  int _num_sms;
+  int _num_l2;
+public:
+  SMtoL2TrafficPattern(int nodes, int num_sms, int num_l2);
+  virtual int dest(int source);
+};
+
 class HotSpotTrafficPattern : public TrafficPattern {
 private:
   vector<int> _hotspots;
@@ -168,6 +177,15 @@ private:
 public:
   HotSpotTrafficPattern(int nodes, vector<int> hotspots, 
 			vector<int> rates = vector<int>());
+  virtual int dest(int source);
+};
+
+class GPUTrafficPattern : public TrafficPattern {
+private:
+  int _num_sms;
+  int _num_l2_slices;
+public:
+  GPUTrafficPattern(int nodes, Configuration const * const config);
   virtual int dest(int source);
 };
 
