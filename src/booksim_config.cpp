@@ -331,6 +331,8 @@ BookSimConfig::BookSimConfig( )
   _float_map["baseline_ratio"] = 0.0;
 
   //==================HBMNet AccelSim options====================
+  _int_map["num_xbars"] = 2;       // P: number of Xbar routers
+  _int_map["hbm_per_side"] = 2;    // H: HBM stacks per side per Xbar
   // MC router links (miss path: Xbar → MC → HBM)
   _int_map["xbar_mc_latency"] = 170;
   _int_map["xbar_mc_bandwidth"] = 14;
@@ -340,6 +342,9 @@ BookSimConfig::BookSimConfig( )
   _int_map["mc_mc_bandwidth"] = 14;
   // baseline_ratio is repurposed as L2 hit rate in AccelSim mode
 
+  // Near-min adaptive routing
+  _int_map["near_min_k"] = 1;  // max extra hops beyond minimum (default k=1)
+  _float_map["near_min_penalty"] = 1.0;  // penalty multiplier for near-min cost (default 1.0, i.e. additive)
   //==================Shared options===========================
   _int_map["is_fabric"] = 0;
   _int_map["inject_latency"] = 1;

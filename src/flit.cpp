@@ -79,6 +79,8 @@ void Flit::Reset()
   pri = 0;
   intm =-1;
   ph = -1;
+  nm_budget = 0;
+  nm_used = false;
   data = 0;
 }  
 
