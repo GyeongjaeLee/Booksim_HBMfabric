@@ -54,7 +54,7 @@ then
 fi
 if [ "${minimum_step}" = "" ]
 then
-    minimum_step=0.001
+    minimum_step=0.005
 fi
 if [ "${zero_load_inj}" = "" ]
 then

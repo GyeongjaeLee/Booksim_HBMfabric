@@ -58,7 +58,8 @@ import subprocess
 import argparse
 import csv
 import concurrent.futures
-from collections import OrderedDict
+
+from experiments_loader import load_experiments
 
 # ============================================================
 #  Configuration
@@ -66,25 +67,12 @@ from collections import OrderedDict
 K_VALUES = [1, 2, 4, 8, 16]
 SIZES_MIB = [8, 16, 32, 64, 128, 256]
 
-# Structure: GPU architecture -> topology parameters
-# Core = num_xbars (P), HBM = total HBM stacks (K = P * hbm_per_side * 2)
-STRUCTURES = OrderedDict([
-    ("B100_Local",       {"num_xbars": 1, "hbm_per_side": 2}),   # Core=1, HBM=4
-    ("H100",             {"num_xbars": 1, "hbm_per_side": 3}),   # Core=1, HBM=6
-    ("B100_Global",      {"num_xbars": 2, "hbm_per_side": 2}),   # Core=2, HBM=8
-    ("B100_Core_Rotate", {"num_xbars": 2, "hbm_per_side": 3}),   # Core=2, HBM=12
-    ("Rubin_Ultra",      {"num_xbars": 4, "hbm_per_side": 2}),   # Core=4, HBM=16
-])
-
-# Bandwidth: 1 unit = 7 ports (GPU-to-GPU=10 -> xbar_xbar_bandwidth=70)
+# Bandwidth: 1 unit = 7 ports
 PORTS_PER_UNIT = 7
 
-BANDWIDTHS = OrderedDict([
-    ("B100+HBM3e",     {"gpu_gpu": 10, "gpu_hbm": 1,    "hbm_hbm": 1}),
-    ("B100+HBM4e",     {"gpu_gpu": 10, "gpu_hbm": 4,    "hbm_hbm": 4}),
-    ("Shoreline_ratio", {"gpu_gpu": 10, "gpu_hbm": 3.33, "hbm_hbm": 3.89}),
-    ("Aggressive_Max",  {"gpu_gpu": 5,  "gpu_hbm": 4,    "hbm_hbm": 4}),
-])
+# Structure and bandwidth tables loaded from experiments.csv
+_HERE = os.path.dirname(os.path.abspath(__file__))
+STRUCTURES, BANDWIDTHS = load_experiments(os.path.join(_HERE, "experiments.csv"))
 
 # Supported routing functions (for hybrid_routing selection)
 ALL_ROUTING_FUNCTIONS = [
@@ -128,10 +116,11 @@ def bw_to_overrides(bw_name):
     """Convert bandwidth config to BookSim config overrides."""
     bw = BANDWIDTHS[bw_name]
     return {
+        "l2_per_hbm":          str(bw["l2_per_hbm"]),
         "xbar_xbar_bandwidth": str(round(bw["gpu_gpu"] * PORTS_PER_UNIT)),
         "xbar_hbm_bandwidth":  str(round(bw["gpu_hbm"] * PORTS_PER_UNIT)),
         "xbar_mc_bandwidth":   str(round(bw["gpu_hbm"] * PORTS_PER_UNIT)),
-        "mc_hbm_bandwidth":    str(round(bw["gpu_hbm"] * PORTS_PER_UNIT)),
+        "mc_hbm_bandwidth":    str(round(bw["tsv"]     * PORTS_PER_UNIT)),
         "mc_mc_bandwidth":     str(round(bw["hbm_hbm"] * PORTS_PER_UNIT)),
     }
 
@@ -140,8 +129,9 @@ def struct_to_overrides(struct_name):
     """Convert structure config to BookSim config overrides."""
     s = STRUCTURES[struct_name]
     return {
-        "num_xbars": str(s["num_xbars"]),
+        "num_xbars":    str(s["num_xbars"]),
         "hbm_per_side": str(s["hbm_per_side"]),
+        "sm_per_xbar":  str(s["sm_per_xbar"]),
     }
 
 
