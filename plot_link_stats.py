@@ -28,20 +28,15 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import colors
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-from collections import OrderedDict
+
+from experiments_loader import load_experiments
 
 # ============================================================
-#  Constants (same as run_all_moe.py)
+#  Constants loaded from experiments.csv
 # ============================================================
-STRUCTURES = OrderedDict([
-    ("B100_Local",       {"num_xbars": 1, "hbm_per_side": 2}),
-    ("H100",             {"num_xbars": 1, "hbm_per_side": 3}),
-    ("B100_Global",      {"num_xbars": 2, "hbm_per_side": 2}),
-    ("B100_Core_Rotate", {"num_xbars": 2, "hbm_per_side": 3}),
-    ("Rubin_Ultra",      {"num_xbars": 4, "hbm_per_side": 2}),
-])
-
-BANDWIDTHS = ["B100+HBM3e", "B100+HBM4e", "Shoreline_ratio", "Aggressive_Max"]
+_HERE = os.path.dirname(os.path.abspath(__file__))
+STRUCTURES, _BANDWIDTHS_DICT = load_experiments(os.path.join(_HERE, "experiments.csv"))
+BANDWIDTHS = list(_BANDWIDTHS_DICT.keys())
 
 RESULT_DIR = "./results"
 
