@@ -552,8 +552,11 @@ int HotSpotTrafficPattern::dest(int source)
 GPUTrafficPattern::GPUTrafficPattern(int nodes, Configuration const * const config)
    : TrafficPattern(nodes)
 {
-  _num_sms = config->GetInt("num_sms");
-  _num_l2_slices = config->GetInt("num_l2_slices");
+  int P = config->GetInt("num_xbars");
+  int H = config->GetInt("hbm_per_side");
+  int K = P * H * 2;
+  _num_sms = config->GetInt("sm_per_xbar") * P;
+  _num_l2_slices = config->GetInt("l2_per_hbm") * K;
 }
 
 int GPUTrafficPattern::dest(int source)

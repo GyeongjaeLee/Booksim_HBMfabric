@@ -2,16 +2,14 @@
 // Models L2-HBM path: hit (Xbar→HBM) vs miss (Xbar→MC→HBM)
 topology = hbmnet_accelsim;
 
-// Hardware: 148 SMs, 256 L2 slices
 // Topology: P Xbars in a chain, H HBM stacks per side per Xbar
 // Total HBM stacks K = P * H * 2
-// num_sms must be a multiple of num_xbars
-// num_l2_slices must be a multiple of K
-num_sms = 148;
-num_l2_slices = 256;
+// Derived: num_sms = sm_per_xbar * P,  num_l2_slices = l2_per_hbm * K
+sm_per_xbar = 74;     // SMs per Xbar (concentration)
 num_xbars = 2;        // P: number of Xbar routers (e.g. 1, 2, 4)
 hbm_per_side = 2;     // H: HBM stacks per side per Xbar (e.g. 1, 2, 3)
-// K = 2 * 2 * 2 = 8 total HBM stacks
+l2_per_hbm = 32;      // L2 slices per HBM stack
+// P=2, H=2 → K=8, num_sms=148, num_l2=256
 l2_interleave = 0;
 
 // Routing
@@ -35,16 +33,16 @@ near_min_k = 1;
 
 // Near-min penalty multiplier: scales the latency penalty for near-min directions.
 // 0.0 = no penalty (always pick least congested), 1.0 = default, >1.0 = more conservative
-near_min_penalty = 1.0;
+near_min_penalty = 1.5;
 
 inject_latency = 50;
 eject_latency = 50;
 
 // Link latencies (cycles)
 xbar_xbar_latency = 185;
-xbar_hbm_latency = 10;    // hit path: Xbar ↔ HBM
-xbar_mc_latency = 100;      // miss path: Xbar ↔ MC
-mc_hbm_latency = 50;      // miss path: MC ↔ HBM (models DRAM access)
+xbar_hbm_latency = 30;    // hit path: Xbar ↔ HBM
+xbar_mc_latency = 115;      // miss path: Xbar ↔ MC
+mc_hbm_latency = 35;      // miss path: MC ↔ HBM (models DRAM access)
 mc_mc_latency = 85;         // miss path fabric: MC ↔ MC
 
 // Link bandwidths (parallel ports per link pair)
@@ -56,7 +54,7 @@ mc_mc_bandwidth = 7;       // fabric
 
 // Flow control
 num_vcs     = 4;
-vc_buf_size = 512;
+vc_buf_size = 16384;
 wait_for_tail_credit = 0;
 
 // Router architecture
@@ -72,6 +70,10 @@ sw_alloc_delay = 1;
 input_speedup     = 1;
 output_speedup    = 1;
 internal_speedup  = 2.0;
+// HBM router internal speedup override (0.0 = use global internal_speedup).
+// Set > 0 to give HBM routers a faster crossbar so mc_hbm_bandwidth is the
+// true TSV bottleneck rather than the router crossbar.
+hbm_internal_speedup = 0.0;
 
 // Traffic
 // only generate SM node -> L2 node random traffic
@@ -82,6 +84,6 @@ packet_size = 1;
 // Simulation
 sim_type = latency;
 // sim_type = moe_accelsim;
-injection_rate = 0.7;
+injection_rate = 0.8;
 flit_width_bytes = 40;
 traffic_matrix_file = ./examples/end-to-end/moe_matrix_H2H_k16_128MiB;

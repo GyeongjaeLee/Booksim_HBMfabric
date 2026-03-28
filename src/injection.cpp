@@ -196,7 +196,7 @@ GPUInjectionProcess::GPUInjectionProcess(int nodes, double rate,
                const Configuration* const config)
   : InjectionProcess(nodes, rate)
 {
-  _nums_sms = config->GetInt("num_sms");
+  _nums_sms = config->GetInt("sm_per_xbar") * config->GetInt("num_xbars");
 }
 
 bool GPUInjectionProcess::test(int source)

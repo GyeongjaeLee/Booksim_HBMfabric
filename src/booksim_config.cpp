@@ -316,8 +316,8 @@ BookSimConfig::BookSimConfig( )
   AddStrField("network_file","");
 
   //==================HBMNet options====================
-  _int_map["num_sms"] = 148;
-  _int_map["num_l2_slices"] = 256;
+  _int_map["sm_per_xbar"] = 74;   // SMs per Xbar; num_sms = sm_per_xbar * num_xbars
+  _int_map["l2_per_hbm"] = 32;    // L2 slices per HBM stack; num_l2 = l2_per_hbm * K
   _int_map["num_hbm_stacks"] = 8;
   _int_map["l2_interleave"] = 0;
   _int_map["xbar_xbar_latency"] = 185;
@@ -345,6 +345,8 @@ BookSimConfig::BookSimConfig( )
   // Near-min adaptive routing
   _int_map["near_min_k"] = 1;  // max extra hops beyond minimum (default k=1)
   _float_map["near_min_penalty"] = 1.0;  // penalty multiplier for near-min cost (default 1.0, i.e. additive)
+  // Per-router-type internal speedup override (0.0 = use global internal_speedup)
+  _float_map["hbm_internal_speedup"] = 0.0;
   //==================Shared options===========================
   _int_map["is_fabric"] = 0;
   _int_map["inject_latency"] = 1;
