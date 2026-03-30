@@ -560,7 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--is-fabric", type=int, default=1, choices=[0, 1],
                    help="is_fabric: 0=no MC-MC links, 1=enable fabric  (default: 1)")
     p.add_argument("--baseline-ratio", type=float, default=0.2,
-                   help="baseline_ratio (L2 hit rate, default: 0.2)")
+                   help="baseline_ratio (L2 hit rate, default: 0.5)")
     p.add_argument("--override", nargs="*", default=[], metavar="KEY=VALUE",
                    help="Extra config overrides, e.g. --override num_vcs=8 near_min_strict=1")
     p.add_argument("--base-config", default=BASE_CONFIG,
