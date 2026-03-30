@@ -7,13 +7,12 @@ Each cell is one 3D bar chart. Separate figures for 'util' and 'sat' metrics
 when --metric=both.
 
 Usage:
-  # Compare Fabric routings across BWs
-  python3 plot_link_stats.py --structures B100_Global \\
-      --bandwidths B100+HBM3e B100+HBM4e --schemes Fabric \\
-      --routings min_adaptive near_min_adaptive --k-values 16 --sizes 256
-
-  # All BW + all schemes for a structure
-  python3 plot_link_stats.py --structures B100_Global --k-values 16 --sizes 256
+  # Compare Fabric routings across BWs (GPU-HBM matrix)
+  python3 plot_link_stats.py --structures B100_Global \
+      --bandwidths B200+HBM3e Rubin_Ultra+HBM4 --schemes Fabric \
+      --routings min_adaptive near_min_adaptive near_min_random fixed_min \
+      --near-min-k 2 --near-min-p 1.0 --matrix-type GPU-HBM \
+      --k-values 16 --sizes 256
 
   # Save to file
   python3 plot_link_stats.py ... --output linkstats.png
@@ -38,7 +37,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 STRUCTURES, _BANDWIDTHS_DICT = load_experiments(os.path.join(_HERE, "experiments.csv"))
 BANDWIDTHS = list(_BANDWIDTHS_DICT.keys())
 
-RESULT_DIR = "./results"
+# Base result directory (updated to user's specification)
+DEFAULT_RESULT_DIR = "./results/moe"
 
 
 # ============================================================
@@ -98,17 +98,29 @@ def parse_result_file(filepath):
     result['nearmin_pct'] = float(m.group(1)) if m else None
     m = re.search(r'Near-min path usage:\s*(\d+)\s*/\s*(\d+)\s*\(\s*([\d.]+)%\)', text)
     result['nearmin_path_pct'] = float(m.group(3)) if m else None
+    m = re.search(r'\+2 hop decisions:\s*(\d+)', text)
+    result['nearmin_plus2'] = int(m.group(1)) if m else None
 
     return result
 
 
-def get_result_path(result_dir, struct_name, bw_name, scenario, routing, k, size_mib):
+def scheme_routing_dirname(scenario, routing, nm_k, nm_p):
+    """Build directory name for scheme + routing combination including near-min params."""
+    if scenario == "Baseline" or routing == "baseline":
+        return f"{scenario}_baseline"
+    base = f"{scenario}_{routing}"
+    
+    if routing == "near_min_adaptive":
+        base += f"_nmk{nm_k}_nmp{nm_p}"
+    elif routing == "near_min_random":
+        base += f"_nmk{nm_k}"
+        
+    return base
+
+
+def get_result_path(base_result_dir, struct_name, bw_name, sr_dirname, k, size_mib):
     """Build result file path."""
-    if scenario == "Baseline":
-        sr_dir = "Baseline_baseline"
-    else:
-        sr_dir = f"{scenario}_{routing}"
-    return os.path.join(result_dir, struct_name, bw_name, sr_dir,
+    return os.path.join(base_result_dir, struct_name, bw_name, sr_dirname,
                         f"k{k}_{size_mib}MiB.txt")
 
 
@@ -154,6 +166,15 @@ def make_summary_text(parsed, mode='util'):
     else:  # sat
         agg = parsed['agg_sat']
         lines.append(f"Sat: X-X={agg['XBAR_XBAR']:.1f}% X-M={agg['XBAR_MC']:.1f}% M-M={agg['MC_MC']:.1f}%")
+
+    # Near-min stats (if available)
+    nm = []
+    if parsed.get('nearmin_pct') is not None:
+        nm.append(f"NM={parsed['nearmin_pct']:.1f}%")
+    if parsed.get('nearmin_plus2') is not None and parsed['nearmin_plus2'] > 0:
+        nm.append(f"+2={parsed['nearmin_plus2']:,}")
+    if nm:
+        lines.append(" ".join(nm))
 
     # Perf (always shown)
     perf = []
@@ -218,10 +239,21 @@ def main():
     parser.add_argument('--bandwidths', nargs='+', default=BANDWIDTHS)
     parser.add_argument('--schemes', nargs='+', default=['Baseline', 'Fabric', 'Offloading'])
     parser.add_argument('--routings', nargs='+',
-                        default=['baseline', 'min_adaptive', 'near_min_adaptive'])
+                        default=['baseline', 'min_adaptive', 'fixed_min',
+                                 'near_min_adaptive', 'near_min_random'])
     parser.add_argument('--k-values', nargs='+', type=int, default=[16])
     parser.add_argument('--sizes', nargs='+', type=int, default=[256])
-    parser.add_argument('--result-dir', default=RESULT_DIR)
+    parser.add_argument('--result-dir', default=DEFAULT_RESULT_DIR,
+                        help='Base result directory (default: ./results/moe)')
+    
+    # New options for Near-min and Matrix
+    parser.add_argument('--near-min-k', type=int, default=2,
+                        help='Near-min routing budget k (default: 2)')
+    parser.add_argument('--near-min-p', type=float, default=1.0,
+                        help='Near-min routing penalty multiplier (default: 1.0)')
+    parser.add_argument('--matrix-type', choices=['GPU-HBM', 'End-to-End'], default='GPU-HBM',
+                        help='Traffic matrix type (determines subfolder in result dir)')
+    
     parser.add_argument('--output', '-o', default=None,
                         help='Save plot to file (png/pdf/svg). '
                              'With --metric=both, _util and _sat suffixes are added.')
@@ -229,6 +261,9 @@ def main():
                         help='Which metric: util, sat, or both (separate figures)')
     parser.add_argument('--dpi', type=int, default=150)
     args = parser.parse_args()
+
+    # Base result directory includes matrix type: ./results/moe/GPU-HBM
+    base_result_dir = os.path.join(args.result_dir, args.matrix_type)
 
     # --- Collect experiments as a 2D grid ---
     # Rows = bandwidths, Columns = scheme_routing combos (column order preserved)
@@ -242,21 +277,18 @@ def main():
                 col_keys.append(key)
                 seen_cols.add(key)
 
-    # For each (struct, bw, scheme, routing, k, size) find files
-    # We iterate struct and k/size as outer loops; within one figure,
-    # rows=bw, cols=scheme_routing
     for struct in args.structures:
         for k in args.k_values:
             for size in args.sizes:
-                # Build the grid: grid[bw_idx][col_idx] = (exp_info, parsed)
                 row_keys = []  # bw names that have at least one result
                 grid = {}      # (bw, col_idx) -> (label, parsed)
 
                 for bw in args.bandwidths:
                     has_any = False
                     for ci, (scheme, routing) in enumerate(col_keys):
-                        fpath = get_result_path(args.result_dir, struct, bw,
-                                                scheme, routing, k, size)
+                        sr_dir = scheme_routing_dirname(scheme, routing, args.near_min_k, args.near_min_p)
+                        fpath = get_result_path(base_result_dir, struct, bw,
+                                                sr_dir, k, size)
                         if not os.path.exists(fpath):
                             continue
                         try:
@@ -264,7 +296,13 @@ def main():
                         except Exception as e:
                             print(f"  [WARN] {fpath}: {e}", file=sys.stderr)
                             continue
+                        
                         sr_label = f"{scheme}_{routing}"
+                        if routing == "near_min_adaptive":
+                            sr_label += f"\n(k={args.near_min_k}, p={args.near_min_p})"
+                        elif routing == "near_min_random":
+                            sr_label += f"\n(k={args.near_min_k})"
+                            
                         grid[(bw, ci)] = (sr_label, parsed)
                         has_any = True
                     if has_any:
@@ -305,16 +343,15 @@ def main():
                     fig_h = cell_h * n_rows + 1.5
 
                     fig = plt.figure(figsize=(fig_w, fig_h))
-                    fig.suptitle(
-                        f"{metric_label}  —  {struct}  k{k}  {size}MiB",
-                        fontsize=13, fontweight='bold', y=0.995)
+                    title_text = f"{metric_label}  —  {struct} ({args.matrix_type})  k{k}  {size}MiB"
+                    fig.suptitle(title_text, fontsize=13, fontweight='bold', y=0.995)
 
                     for ri, bw in enumerate(row_keys):
                         for ci, (scheme, routing) in enumerate(col_keys):
                             cell = grid.get((bw, ci))
                             idx = ri * n_cols + ci + 1
-                            ax = fig.add_subplot(n_rows, n_cols, idx,
-                                                 projection='3d')
+                            ax = fig.add_subplot(n_rows, n_cols, idx, projection='3d')
+                            
                             if cell is None:
                                 ax.set_visible(False)
                                 continue
@@ -326,8 +363,7 @@ def main():
 
                             # Title: column label on top row, row label on left col
                             title = f"{bw}\n{sr_label}"
-                            ax.set_title(title, fontsize=8, fontweight='bold',
-                                         pad=6)
+                            ax.set_title(title, fontsize=8, fontweight='bold', pad=6)
 
                             # Summary box
                             summary_mode = 'util' if value_key == 'pct' else 'sat'
@@ -359,8 +395,17 @@ def main():
                         suffix = ''
                         if args.metric == 'both':
                             suffix = '_util' if value_key == 'pct' else '_sat'
-                        if len(args.structures) > 1 or len(args.k_values) > 1 or len(args.sizes) > 1:
-                            suffix += f"_{struct}_k{k}_{size}M"
+                        
+                        suffix += f"_{struct}_{args.matrix_type}_k{k}_{size}M"
+                        
+                        # Add near-min info to filename if any near-min routing is plotted
+                        has_adp = any(r == "near_min_adaptive" for _, r in col_keys)
+                        has_rnd = any(r == "near_min_random" for _, r in col_keys)
+                        if has_adp:
+                            suffix += f"_nmk{args.near_min_k}_nmp{args.near_min_p}"
+                        elif has_rnd:
+                            suffix += f"_nmk{args.near_min_k}"
+                            
                         outpath = f"{base}{suffix}{ext}"
                         fig.savefig(outpath, dpi=args.dpi, bbox_inches='tight')
                         print(f"Saved: {outpath}")

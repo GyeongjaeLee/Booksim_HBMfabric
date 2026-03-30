@@ -3,52 +3,17 @@
 Run all MoE simulations: structures x bandwidths x scenarios x routings x k x sizes.
 
 Output directory structure:
-  RESULT_DIR/{Structure}/{Bandwidth}/{Scheme}_{routing}/k{K}_{Size}MiB.txt
-
-============================================================
-  Structures (from experiments.csv)
-============================================================
-  B100_Local        Core=1, HBM=4   (num_xbars=1, hbm_per_side=2)
-  H100              Core=1, HBM=6   (num_xbars=1, hbm_per_side=3)
-  B100_Global       Core=2, HBM=8   (num_xbars=2, hbm_per_side=2)
-  B100_Core_Rotate  Core=2, HBM=12  (num_xbars=2, hbm_per_side=3)
-  Rubin_Ultra       Core=4, HBM=16  (num_xbars=4, hbm_per_side=2)
-
-============================================================
-  Bandwidths (from experiments.csv)
-============================================================
-  1 bandwidth unit = 7 ports  (GPU-to-GPU=10 -> xbar_xbar_bandwidth=70)
-
-  B100+HBM3e       GPU-GPU=10  GPU-HBM=1     HBM-HBM=1
-  B100+HBM4e       GPU-GPU=10  GPU-HBM=4     HBM-HBM=4
-  Shoreline_ratio   GPU-GPU=10  GPU-HBM=3.33  HBM-HBM=3.89
-  Aggressive_Max    GPU-GPU=5   GPU-HBM=4     HBM-HBM=4
-
-============================================================
-  Scenarios
-============================================================
-  Baseline:     routing_function=baseline always.
-  Fabric:       routing_function=hybrid, --routings selects hybrid_routing.
-  Offloading:   routing_function=hybrid, --routings selects hybrid_routing.
+  RESULT_DIR/{Structure}/{Bandwidth}/{Scheme}_{routing}[_nmk{K}_nmp{P}]/k{K}_{Size}MiB.txt
 
 ============================================================
   Usage examples
 ============================================================
-  # Run specific structure + bandwidth
-  python3 run_all_moe.py --structures B100_Global --bandwidths B100+HBM3e
-
-  # Compare routings for Fabric/Offloading
-  python3 run_all_moe.py --routings min_adaptive near_min_adaptive --schemes Fabric Offloading
-
-  # Filter by k and size
-  python3 run_all_moe.py --k-values 1 4 --sizes 8 64
+  # Run specific structure + bandwidth with near-min params
+  python3 run_all_moe.py --structures B100_Global --bandwidths B200+HBM3e \
+                         --routings near_min_random --near-min-k 2 --near-min-p 1.5
 
   # Collect results from directories into a single CSV
-  python3 run_all_moe.py --collect ./results/B100_Global ./results/H100
-
-  # Other options
-  [--dry-run] [--skip-existing] [--parse-only] [--yes]
-  [--booksim ./src/booksim] [--workers 8] [--result-dir ./results]
+  python3 run_all_moe.py --collect ./results/B100_Global
 """
 
 import os
@@ -77,7 +42,7 @@ STRUCTURES, BANDWIDTHS = load_experiments(os.path.join(_HERE, "experiments.csv")
 # Supported routing functions (for hybrid_routing selection)
 ALL_ROUTING_FUNCTIONS = [
     "baseline", "min_oblivious", "min_adaptive",
-    "near_min_adaptive", "valiant", "ugal",
+    "near_min_adaptive", "near_min_random", "valiant", "ugal", "fixed_min"
 ]
 
 # Default hybrid_routing when --routings not specified
@@ -105,8 +70,8 @@ SCENARIOS = [
 ]
 
 BASE_CONFIG = "./src/examples/hbmnet_accelsim_config"
-MATRIX_DIR = "./src/examples/moe-GPU-HBM/"
-RESULT_DIR = "./results"
+MATRIX_DIR = "./src/examples/moe/GPU-HBM/"
+RESULT_DIR = "./results/moe"
 
 
 # ============================================================
@@ -135,10 +100,15 @@ def struct_to_overrides(struct_name):
     }
 
 
-def scheme_routing_dirname(scenario, routing):
+def scheme_routing_dirname(scenario, routing, nm_k, nm_p):
     """Get directory name for scheme + routing combination."""
     if scenario.get("hybrid_scheme", False):
-        return f"{scenario['label']}_{routing}"
+        base = f"{scenario['label']}_{routing}"
+        if routing == "near_min_adaptive":
+            base += f"_nmk{nm_k}_nmp{nm_p}"
+        elif routing == "near_min_random":
+            base += f"_nmk{nm_k}"
+        return base
     else:
         return f"{scenario['label']}_baseline"
 
@@ -311,6 +281,7 @@ def _fmt_pct(val):
 # ============================================================
 CSV_FIELDS = [
     'structure', 'bandwidth', 'scenario', 'routing_function',
+    'nm_k', 'nm_p',  # Near-min parameters
     'k', 'size_mib', 'total_mb',
     'total_packets', 'time_taken',
     'pkt_lat_avg', 'pkt_lat_min', 'pkt_lat_max',
@@ -345,7 +316,10 @@ def run_single_scenario(job):
     bw_name     = job['bandwidth']
     result_dir  = job['result_dir']
 
-    sr_dir = scheme_routing_dirname(scenario, routing)
+    nm_k = args.near_min_k
+    nm_p = args.near_min_p
+
+    sr_dir = scheme_routing_dirname(scenario, routing, nm_k, nm_p)
     result_path = get_result_path(result_dir, struct_name, bw_name, sr_dir, k, size_mib)
     display_path = os.path.relpath(result_path, result_dir)
     matrix_path = find_matrix_file(scenario["matrix_prefix"], k, size_mib)
@@ -363,7 +337,7 @@ def run_single_scenario(job):
         if not total_mb and matrix_path:
             try: total_mb = read_total_mb(matrix_path)
             except: pass
-        row = _make_row(struct_name, bw_name, base_label, routing, k, size_mib,
+        row = _make_row(struct_name, bw_name, base_label, routing, nm_k, nm_p, k, size_mib,
                         total_mb, matrix_path or '', result_path, r)
         return {'status': 'parsed', 'row': row,
                 'msg': f"[{job_num}/{total_jobs}] [PARSED] {display_path}"}
@@ -383,7 +357,7 @@ def run_single_scenario(job):
         if not total_mb:
             try: total_mb = read_total_mb(matrix_path)
             except: pass
-        row = _make_row(struct_name, bw_name, base_label, routing, k, size_mib,
+        row = _make_row(struct_name, bw_name, base_label, routing, nm_k, nm_p, k, size_mib,
                         total_mb, matrix_path, result_path, r)
         return {'status': 'skipped', 'row': row,
                 'msg': f"[{job_num}/{total_jobs}] [EXISTS] {display_path}"}
@@ -407,6 +381,11 @@ def run_single_scenario(job):
     if scenario.get("hybrid_scheme", False):
         overrides["routing_function"] = "hybrid"
         overrides["hybrid_routing"] = routing
+        if routing == "near_min_adaptive":
+            overrides["near_min_k"] = str(nm_k)
+            overrides["near_min_penalty"] = str(nm_p)
+        elif routing == "near_min_random":
+            overrides["near_min_k"] = str(nm_k)
     else:
         overrides["routing_function"] = "baseline"
 
@@ -434,7 +413,7 @@ def run_single_scenario(job):
         with open(result_path, 'w') as f:
             f.write(text)
         r = extract_results(text)
-        row = _make_row(struct_name, bw_name, base_label, routing, k, size_mib,
+        row = _make_row(struct_name, bw_name, base_label, routing, nm_k, nm_p, k, size_mib,
                         total_mb, matrix_path, result_path, r)
         tp = r.get('total_packets')
         tt = r.get('time_taken')
@@ -456,12 +435,17 @@ def run_single_scenario(job):
     return {'status': status, 'row': row, 'msg': msg}
 
 
-def _make_row(struct_name, bw_name, scenario_label, routing, k, size_mib,
+def _make_row(struct_name, bw_name, scenario_label, routing, nm_k, nm_p, k, size_mib,
               total_mb, matrix_path, result_path, parsed):
     """Build a CSV row dict from parsed results."""
+    # nm_p is irrelevant for near_min_random
+    eff_nm_p = "" if routing == "near_min_random" else nm_p
+    eff_nm_k = nm_k if "near_min" in routing else ""
+
     row = {
         'structure': struct_name, 'bandwidth': bw_name,
         'scenario': scenario_label, 'routing_function': routing,
+        'nm_k': eff_nm_k, 'nm_p': eff_nm_p,
         'k': k, 'size_mib': size_mib, 'total_mb': total_mb,
         'matrix_file': matrix_path, 'result_file': result_path,
     }
@@ -476,11 +460,20 @@ def _sort_key(row):
     struct_order = {name: i for i, name in enumerate(STRUCTURES.keys())}
     bw_order = {name: i for i, name in enumerate(BANDWIDTHS.keys())}
     scenario_order = {'Baseline': 0, 'Fabric': 1, 'Offloading': 2}
+    
+    nm_k = row.get('nm_k', 0)
+    nm_k_val = 0 if nm_k in ('', None) else int(nm_k)
+    
+    nm_p = row.get('nm_p', 0.0)
+    nm_p_val = 0.0 if nm_p in ('', None) else float(nm_p)
+    
     return (
         struct_order.get(row.get('structure', ''), 999),
         bw_order.get(row.get('bandwidth', ''), 999),
         scenario_order.get(row.get('scenario', ''), 999),
         row.get('routing_function', ''),
+        nm_k_val,
+        nm_p_val,
         row.get('k', 0),
         row.get('size_mib', 0),
     )
@@ -516,10 +509,25 @@ def collect_results(dirs, csv_path):
 
                 # Parse scheme and routing from Scheme_routing dirname
                 scheme, routing = '', sr_name
+                nm_k, nm_p = "", ""
                 for s in ['Offloading', 'Baseline', 'Fabric']:
                     if sr_name.startswith(s + '_'):
                         scheme = s
-                        routing = sr_name[len(s) + 1:]
+                        rest = sr_name[len(s) + 1:]
+                        
+                        m_adp = re.match(r'^(near_min_adaptive)_nmk(\d+)_nmp([\d.]+)$', rest)
+                        m_rnd = re.match(r'^(near_min_random)_nmk(\d+)$', rest)
+                        
+                        if m_adp:
+                            routing = m_adp.group(1)
+                            nm_k = int(m_adp.group(2))
+                            nm_p = float(m_adp.group(3))
+                        elif m_rnd:
+                            routing = m_rnd.group(1)
+                            nm_k = int(m_rnd.group(2))
+                            nm_p = ""
+                        else:
+                            routing = rest
                         break
 
                 with open(fpath, 'r') as f:
@@ -529,6 +537,7 @@ def collect_results(dirs, csv_path):
                 row = {
                     'structure': struct_name, 'bandwidth': bw_name,
                     'scenario': scheme, 'routing_function': routing,
+                    'nm_k': nm_k, 'nm_p': nm_p,
                     'k': k_val, 'size_mib': size_mib, 'total_mb': total_mb,
                     'result_file': fpath,
                 }
@@ -581,7 +590,7 @@ def print_plan_summary(active_structs, active_bws, active_scenarios, active_rout
     print()
 
     hdr = (f"  {'#':>4}  {'Structure':<18} {'Bandwidth':<18} {'Scenario':<12} "
-           f"{'Routing':<18} {'k':>3} {'Size':>6}  {'Matrix':^8}  {'Result':^8}  {'MatrixFile'}")
+           f"{'Routing':<25} {'k':>3} {'Size':>6}  {'Matrix':^8}  {'Result':^8}  {'MatrixFile'}")
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
 
@@ -592,7 +601,15 @@ def print_plan_summary(active_structs, active_bws, active_scenarios, active_rout
             for scenario in active_scenarios:
                 routings = routings_for_scenario(scenario, active_routings)
                 for routing in routings:
-                    sr_dir = scheme_routing_dirname(scenario, routing)
+                    sr_dir = scheme_routing_dirname(scenario, routing, args.near_min_k, args.near_min_p)
+                    
+                    # Display routing string nicely
+                    disp_routing = routing
+                    if routing == "near_min_adaptive":
+                        disp_routing += f" (k={args.near_min_k}, p={args.near_min_p})"
+                    elif routing == "near_min_random":
+                        disp_routing += f" (k={args.near_min_k})"
+
                     for k in active_k_values:
                         for size_mib in active_sizes:
                             job_num += 1
@@ -617,7 +634,7 @@ def print_plan_summary(active_structs, active_bws, active_scenarios, active_rout
                                     counts['new'] += 1
 
                             print(f"  {job_num:>4}  {struct_name:<18} {bw_name:<18} "
-                                  f"{scenario['label']:<12} {routing:<18} {k:>3} "
+                                  f"{scenario['label']:<12} {disp_routing:<25} {k:>3} "
                                   f"{str(size_mib)+'MiB':>6}  {matrix_tag}  {result_tag}  "
                                   f"{matrix_display}")
 
@@ -649,7 +666,7 @@ def _print_result_table(rows):
             return '' if v is None else str(v)
         print(f"{_s('structure'):<18} {_s('bandwidth'):<18} {_s('scenario'):<12} "
               f"{_s('routing_function'):<18} {_s('k'):>3} {_s('size_mib')+'M':>6} "
-              f"{_s('total_packets'):>10} {_s('taken_time'):>12} {_s('pkt_lat_avg'):>9} {_s('hops_avg'):>6} "
+              f"{_s('total_packets'):>10} {_s('time_taken'):>12} {_s('pkt_lat_avg'):>9} {_s('hops_avg'):>6} "
               f"{_fmt_pct(row.get('nearmin_nonmin_pct')):>6} "
               f"{_fmt_pct(row.get('nearmin_path_pct')):>8} "
               f"{_fmt_pct(row.get('sat_xbar_xbar')):>7} "
@@ -671,7 +688,7 @@ def main():
             "Bandwidths:  " + ", ".join(BANDWIDTHS.keys()),
             "Routings:    " + ", ".join(ALL_ROUTING_FUNCTIONS),
             "",
-            "Output: RESULT_DIR/{Structure}/{Bandwidth}/{Scheme}_{routing}/k{K}_{Size}MiB.txt",
+            "Output: RESULT_DIR/{Structure}/{Bandwidth}/{Scheme}_{routing}[_nmk{K}_nmp{P}]/k{K}_{Size}MiB.txt",
             "",
             "Baseline scheme always uses routing_function=baseline.",
             "Fabric/Offloading use routing_function=hybrid; --routings selects hybrid_routing.",
@@ -707,6 +724,12 @@ def main():
                         help='k values (default: 1 2 4 8 16)', default=None)
     parser.add_argument('--sizes', nargs='+', type=int,
                         help='Sizes in MiB (default: 8 16 32 64 128 256)', default=None)
+    
+    # Near-min custom params
+    parser.add_argument('--near-min-k', type=int, default=2,
+                        help='Near-min routing budget k (default: 2)')
+    parser.add_argument('--near-min-p', type=float, default=1.0,
+                        help='Near-min routing penalty multiplier (default: 1.0)')
 
     # Collect mode
     parser.add_argument('--collect', nargs='+', metavar='DIR',

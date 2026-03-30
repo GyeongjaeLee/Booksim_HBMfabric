@@ -13,46 +13,32 @@ Directory layout
 
 Routing keys
 ------------
-  baseline       routing_function=baseline
-  min_oblivious  routing_function=hybrid, hybrid_routing=min_oblivious
-  min_adaptive   routing_function=hybrid, hybrid_routing=min_adaptive
-  near_min_p0.0  routing_function=hybrid, hybrid_routing=near_min_adaptive, near_min_penalty=0.0
-  ugal           routing_function=hybrid, hybrid_routing=ugal
-  valiant        routing_function=hybrid, hybrid_routing=valiant
+  baseline                                   routing_function=hybrid, hybrid_routing=baseline
+  min_oblivious                              routing_function=hybrid, hybrid_routing=min_oblivious
+  min_adaptive                               routing_function=hybrid, hybrid_routing=min_adaptive
+  fixed_min                                  routing_function=hybrid, hybrid_routing=fixed_min
+  near_min_adaptive_nmk<K>_nmp<P>            routing_function=hybrid, hybrid_routing=near_min_adaptive, k=K, p=P
+  near_min_random_nmk<K>                     routing_function=hybrid, hybrid_routing=near_min_random, k=K
+  ugal                                       routing_function=hybrid, hybrid_routing=ugal
+  valiant                                    routing_function=hybrid, hybrid_routing=valiant
 
 Examples
 --------
-  # Run baseline + adaptive routings for B100_Global with B100+HBM4e bandwidth
-  # Default traffic: gpu (SM→L2 only) with gpu_bernoulli injection process
-  python3 run_sweep.py run \\
-      --structure B100_Global \\
-      --bandwidth B100+HBM4e \\
-      --routing baseline min_adaptive near_min_adaptive \\
-      --near-min-p 0.0 0.5 1.0 1.5 \\
+  # Run baseline + near-min combinations for B100_Global
+  python3 run_sweep.py run \
+      --structure B100_Global \
+      --bandwidth B100+HBM4e \
+      --routing baseline near_min_adaptive near_min_random \
+      --near-min-k 1 2 \
+      --near-min-p 0.0 1.0 \
       --traffic gpu --injection-process gpu_bernoulli
 
-  # Run with uniform all-to-all traffic (every node injects to every other node)
-  python3 run_sweep.py run \\
-      --structure Rubin_Ultra --bandwidth B100+HBM4e \\
-      --routing min_adaptive \\
-      --traffic uniform --injection-process bernoulli \\
-      --traffic-label all-to-all
-
-  # Plot: compare routings for one structure/bandwidth
-  python3 run_sweep.py plot \\
-      --structure B100_Global --bandwidth B100+HBM4e \\
-      --routing baseline min_adaptive near_min_p0.0 near_min_p1.0
-
-  # Plot: compare structures for one routing
-  python3 run_sweep.py plot \\
-      --structure B100_Global Rubin_Ultra --bandwidth B100+HBM4e \\
-      --routing min_adaptive --metric throughput
-
-  # Plot: specify paths directly
-  python3 run_sweep.py plot \\
-      --paths results/sweep/B100_Global/B100+HBM4e/gpu/min_adaptive \\
-               results/sweep/Rubin_Ultra/B100+HBM4e/gpu/min_adaptive \\
-      --labels "B100 adp" "Rubin adp"
+  # Plot: compare routings including different k and p values
+  python3 run_sweep.py plot \
+      --structure B100_Global --bandwidth B100+HBM4e \
+      --routing baseline min_adaptive near_min_adaptive near_min_random \
+      --near-min-k 1 2 \
+      --near-min-p 1.0
 """
 
 import argparse
@@ -88,47 +74,64 @@ RESULT_DIR    = os.path.join(_HERE, "results", "sweep")
 
 ROUTING_CHOICES = [
     "baseline", "min_oblivious", "min_adaptive",
-    "near_min_adaptive", "ugal", "valiant",
+    "near_min_adaptive", "near_min_random", "fixed_min",
+    "ugal", "valiant",
 ]
 
 
-def routing_to_key(routing: str, near_min_p: "float | None" = None) -> str:
-    """Convert routing name (+ optional P value) to a directory key."""
+def routing_to_key(routing: str, near_min_k: int = 2, near_min_p: float = 1.0) -> str:
+    """Convert routing name (+ optional K and P values) to a directory key."""
     if routing == "near_min_adaptive":
-        p = near_min_p if near_min_p is not None else 1.0
-        return f"near_min_p{p:.1f}"
+        return f"near_min_adaptive_nmk{near_min_k}_nmp{near_min_p:.1f}"
+    elif routing == "near_min_random":
+        return f"near_min_random_nmk{near_min_k}"
     return routing
 
 
 def routing_key_to_label(key: str) -> str:
     """Human-readable legend label for a routing key."""
     _LABELS = {
-        "baseline":      "Baseline",
-        "min_oblivious": "Min-oblivious",
-        "min_adaptive":  "Min-adaptive",
-        "ugal":          "UGAL",
-        "valiant":       "Valiant",
+        "baseline":        "Baseline",
+        "min_oblivious":   "Min-oblivious",
+        "min_adaptive":    "Min-adaptive",
+        "fixed_min":       "Fixed-min",
+        "ugal":            "UGAL",
+        "valiant":         "Valiant",
     }
     if key in _LABELS:
         return _LABELS[key]
-    m = re.match(r"near_min_p([\d.]+)$", key)
-    if m:
-        return f"Near-min P={m.group(1)}"
+    
+    m_adp = re.match(r"near_min_adaptive_nmk(\d+)_nmp([\d.]+)$", key)
+    if m_adp:
+        return f"Near-min-adp (k={m_adp.group(1)}, p={m_adp.group(2)})"
+    
+    m_rnd = re.match(r"near_min_random_nmk(\d+)$", key)
+    if m_rnd:
+        return f"Near-min-rnd (k={m_rnd.group(1)})"
+    
     return key
 
 
 def routing_key_to_overrides(key: str, is_fabric: int) -> dict:
     """Config overrides for a given routing key."""
-    ov = {"is_fabric": str(is_fabric)}
+    ov = {"is_fabric": str(is_fabric), "routing_function": "hybrid"}
     if key == "baseline":
-        ov["routing_function"] = "baseline"
+        ov["hybrid_routing"] = "baseline"
         return ov
-    ov["routing_function"] = "hybrid"
-    m = re.match(r"near_min_p([\d.]+)$", key)
-    if m:
+    
+    m_adp = re.match(r"^near_min_adaptive_nmk(\d+)_nmp([\d.]+)$", key)
+    if m_adp:
         ov["hybrid_routing"]   = "near_min_adaptive"
-        ov["near_min_penalty"] = m.group(1)
+        ov["near_min_k"]       = m_adp.group(1)
+        ov["near_min_penalty"] = m_adp.group(2)
         return ov
+    
+    m_rnd = re.match(r"^near_min_random_nmk(\d+)$", key)
+    if m_rnd:
+        ov["hybrid_routing"]   = "near_min_random"
+        ov["near_min_k"]       = m_rnd.group(1)
+        return ov
+    
     ov["hybrid_routing"] = key
     return ov
 
@@ -182,7 +185,7 @@ def bw_overrides(name: str) -> dict:
 
 def run_sweep(booksim: str, sweep_sh: str, config_path: str,
               output_path: str, initial_step: str = "0.05",
-              minimum_step: str = "0.001", dry_run: bool = False) -> bool:
+              minimum_step: str = "0.00005", dry_run: bool = False) -> bool:
     """Execute sweep.sh and save combined stdout to output_path."""
     cmd = ["sh", sweep_sh, booksim, config_path]
     if dry_run:
@@ -289,14 +292,11 @@ def _run_one(exp: dict, args, i: int, n: int) -> dict:
     overrides["sim_type"]          = "latency"
     overrides["traffic"]           = args.traffic
     overrides["injection_process"] = args.injection_process
-    if args.near_min_k is not None:
-        overrides["near_min_k"] = str(args.near_min_k)
 
     for kv in (args.override or []):
         k, _, v = kv.partition("=")
         overrides[k.strip()] = v.strip()
 
-    # Each experiment gets its own temp config → no conflicts between parallel runs
     tmp = tempfile.NamedTemporaryFile(
         suffix=".cfg", delete=False,
         prefix=f"sweep_{struct}_{bw}_{rk}_",
@@ -314,7 +314,6 @@ def _run_one(exp: dict, args, i: int, n: int) -> dict:
         if os.path.exists(tmp.name):
             os.remove(tmp.name)
 
-    # Extract saturation throughput from the saved file for the summary line
     sat = ""
     if os.path.exists(out_path):
         for line in open(out_path):
@@ -328,14 +327,22 @@ def _run_one(exp: dict, args, i: int, n: int) -> dict:
 
 
 def cmd_run(args) -> None:
-    # Expand near_min_adaptive × near_min_p values into routing keys
+    # Expand routing keys dynamically based on combinations
     routing_keys: list[str] = []
     for r in args.routing:
         if r == "near_min_adaptive":
-            for p in args.near_min_p:
-                routing_keys.append(routing_to_key("near_min_adaptive", p))
+            for k in args.near_min_k:
+                for p in args.near_min_p:
+                    routing_keys.append(routing_to_key(r, k, p))
+        elif r == "near_min_random":
+            for k in args.near_min_k:
+                # Random does not use 'p', avoid duplicate runs
+                routing_keys.append(routing_to_key(r, k))
         else:
             routing_keys.append(r)
+
+    # Remove duplicates from near_min_random expanding multiple 'p' values
+    routing_keys = list(dict.fromkeys(routing_keys))
 
     experiments = [
         {"structure": s, "bandwidth": b, "routing_key": rk}
@@ -416,7 +423,6 @@ def cmd_plot(args) -> None:
             if args.labels and idx < len(args.labels):
                 label = args.labels[idx]
             else:
-                # Auto-label: last two path components
                 parts = os.path.normpath(os.path.dirname(sweep)).split(os.sep)
                 label = " / ".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
             entries.append({"path": sweep, "label": label})
@@ -427,14 +433,19 @@ def cmd_plot(args) -> None:
             print("Error: --routing is required when not using --paths")
             sys.exit(1)
 
-        # Expand near_min_adaptive × near_min_p (same logic as cmd_run)
         routing_keys: list[str] = []
         for r in args.routing:
             if r == "near_min_adaptive":
-                for p in args.near_min_p:
-                    routing_keys.append(routing_to_key("near_min_adaptive", p))
+                for k in args.near_min_k:
+                    for p in args.near_min_p:
+                        routing_keys.append(routing_to_key(r, k, p))
+            elif r == "near_min_random":
+                for k in args.near_min_k:
+                    routing_keys.append(routing_to_key(r, k))
             else:
                 routing_keys.append(r)
+
+        routing_keys = list(dict.fromkeys(routing_keys))
 
         structures = args.structure or list(STRUCTURES.keys())
         bandwidths = args.bandwidth or list(BANDWIDTHS.keys())
@@ -533,12 +544,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--routing", nargs="+", default=["near_min_adaptive"],
                    choices=ROUTING_CHOICES,
                    help="Routing function(s)")
+    p.add_argument("--near-min-k", nargs="+", type=int, default=[2],
+                   metavar="K",
+                   help="near_min_k extra-hop budget (default: 2)")
     p.add_argument("--near-min-p", nargs="+", type=float, default=[1.0],
                    metavar="P",
-                   help="near_min_penalty values for near_min_adaptive (default: 1.0)")
-    p.add_argument("--near-min-k", type=int, default=None,
-                   metavar="K",
-                   help="near_min_k extra-hop budget (default: keep from base config)")
+                   help="near_min_penalty multiplier values for near_min_adaptive only (default: 1.0)")
     p.add_argument("--traffic", default="gpu",
                    help="booksim traffic= value  (default: gpu)")
     p.add_argument("--injection-process", default="gpu_bernoulli",
@@ -551,7 +562,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--baseline-ratio", type=float, default=0.2,
                    help="baseline_ratio (L2 hit rate, default: 0.2)")
     p.add_argument("--override", nargs="*", default=[], metavar="KEY=VALUE",
-                   help="Extra config overrides, e.g. --override num_vcs=8 near_min_k=2")
+                   help="Extra config overrides, e.g. --override num_vcs=8 near_min_strict=1")
     p.add_argument("--base-config", default=BASE_CONFIG,
                    help=f"Base booksim config  (default: {BASE_CONFIG})")
     p.add_argument("--booksim", default=BOOKSIM_BIN,
@@ -562,8 +573,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"Output root  (default: {RESULT_DIR})")
     p.add_argument("--initial-step", default="0.05",
                    help="sweep.sh initial_step env var  (default: 0.05)")
-    p.add_argument("--minimum-step", default="0.001",
-                   help="sweep.sh minimum_step env var  (default: 0.001)")
+    p.add_argument("--minimum-step", default="0.00005",
+                   help="sweep.sh minimum_step env var  (default: 0.00005)")
     p.add_argument("--workers", type=int, default=os.cpu_count(), metavar="N",
                    help=f"Number of parallel workers (default: {os.cpu_count()})")
     p.add_argument("--skip-existing", action="store_true",
@@ -585,7 +596,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Traffic label directory  (default: gpu)")
     q.add_argument("--routing", nargs="+", metavar="KEY",
                    help="Routing(s) to plot: baseline min_adaptive near_min_adaptive ugal valiant "
-                        "(or already-expanded keys like near_min_p1.5)")
+                        "(or already-expanded keys like near_min_adaptive_nmk2_nmp1.5)")
+    q.add_argument("--near-min-k", nargs="+", type=int, default=[2], metavar="K",
+                   help="near_min_k values when --routing includes near_min_adaptive/random (default: 2)")
     q.add_argument("--near-min-p", nargs="+", type=float, default=[1.0], metavar="P",
                    help="near_min_penalty values when --routing includes near_min_adaptive (default: 1.0)")
 

@@ -38,9 +38,10 @@
 #include "batchtrafficmanager.hpp"
 #include "moetrafficmanager.hpp"
 #include "moetrafficmanager_accelsim.hpp"
-#include "random_utils.hpp" 
+#include "random_utils.hpp"
 #include "vc.hpp"
 #include "packet_reply_info.hpp"
+#include "networks/hbmnet_accelsim.hpp"
 
 TrafficManager * TrafficManager::New(Configuration const & config,
                                      vector<Network *> const & net)
@@ -1537,6 +1538,7 @@ bool TrafficManager::_SingleSim( )
                 cout << "Warmed up ..." <<  "Time used is " << _time << " cycles" <<endl;
                 clear_last = true;
                 _sim_state = running;
+                if (gHBMNetAccelK > 0) hbmnet_accelsim_reset_stats();
             }
         } else if(_sim_state == running) {
             if ( ( !_measure_latency || ( lat_chg_exc_class < 0 ) ) &&
@@ -1685,7 +1687,9 @@ bool TrafficManager::Run( )
 
         //for the love of god don't ever say "Time taken" anywhere else
         //the power script depend on it
-        cout << "Time taken is " << _time << " cycles" <<endl; 
+        cout << "Time taken is " << _time << " cycles" <<endl;
+
+        if (gHBMNetAccelK > 0) hbmnet_accelsim_print_link_stats();
 
         if(_stats_out) {
             WriteStats(*_stats_out);
