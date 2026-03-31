@@ -36,9 +36,7 @@ ugal_intm_select = 0;
 
 // Hit rate: fraction of flits that take the hit path (Xbar→HBM direct)
 // 0.0 = all miss (all go through MC), 1.0 = all hit (no MC involvement)
-baseline_ratio = 0.5;
-// Miss routing sub-function for hybrid: baseline/min_adaptive/near_min_adaptive/ugal/valiant/min_oblivious
-hybrid_routing = near_min_adaptive;
+baseline_ratio = 0.0;
 
 // Near-min k budget: max total non-min hops allowed per packet
 //   k=1: allows one +1 hop (dist stays same) — cannot do +2 hop
@@ -83,7 +81,7 @@ mc_mc_bandwidth = 7;       // fabric
 
 // Flow control
 num_vcs     = 4;
-vc_buf_size = 16384;
+vc_buf_size = 128;
 wait_for_tail_credit = 0;
 
 // Router architecture
@@ -102,13 +100,17 @@ internal_speedup  = 2.0;
 // HBM router internal speedup override (0.0 = use global internal_speedup).
 // Set > 0 to give HBM routers a faster crossbar so mc_hbm_bandwidth is the
 // true TSV bottleneck rather than the router crossbar.
-hbm_internal_speedup = 0.0;
+hbm_internal_speedup = 10.0;
 
 // Traffic
 // only generate SM node -> L2 node random traffic
 traffic = gpu;
 injection_process = gpu_bernoulli;
 packet_size = 1;
+
+use_read_write = 0;
+
+latency_thres = 20000.0;
 
 // Simulation
 sim_type = latency;

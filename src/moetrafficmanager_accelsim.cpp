@@ -18,6 +18,8 @@ MoETrafficManagerAccelSim::MoETrafficManagerAccelSim(const Configuration &config
   _flit_width_bytes = config.GetInt("flit_width_bytes");
   _moe_total_mb = config.GetFloat("moe_total_mb");
 
+  _moe_injection_rate = config.GetFloat("injection_rate");
+
   _moe_dest_rr.resize(_nodes, 0);
 
   _LoadTrafficMatrix(config);
@@ -291,6 +293,8 @@ void MoETrafficManagerAccelSim::_Inject()
 {
   for (int source = 0; source < _nodes; ++source) {
     if (!_partial_packets[source][0].empty()) continue;
+
+    if (RandomFloat() >= _moe_injection_rate) continue;
 
     int dest = -1;
     for (int i = 0; i < _nodes; ++i) {

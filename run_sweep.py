@@ -31,14 +31,16 @@ Examples
       --routing baseline near_min_adaptive near_min_random \
       --near-min-k 1 2 \
       --near-min-p 0.0 1.0 \
-      --traffic gpu --injection-process gpu_bernoulli
+      --traffic gpu --injection-process gpu_bernoulli \
+      --use-read-write
 
-  # Plot: compare routings including different k and p values
+  # Plot: compare routings including different k and p values (with read/write traffic)
   python3 run_sweep.py plot \
       --structure B100_Global --bandwidth B100+HBM4e \
       --routing baseline min_adaptive near_min_adaptive near_min_random \
       --near-min-k 1 2 \
-      --near-min-p 1.0
+      --near-min-p 1.0 \
+      --use-read-write
 """
 
 import argparse
@@ -185,7 +187,7 @@ def bw_overrides(name: str) -> dict:
 
 def run_sweep(booksim: str, sweep_sh: str, config_path: str,
               output_path: str, initial_step: str = "0.05",
-              minimum_step: str = "0.00005", dry_run: bool = False) -> bool:
+              minimum_step: str = "0.0002", dry_run: bool = False) -> bool:
     """Execute sweep.sh and save combined stdout to output_path."""
     cmd = ["sh", sweep_sh, booksim, config_path]
     if dry_run:
@@ -236,7 +238,7 @@ def parse_sweep_file(filepath: str) -> list:
     return [(ir,) + vals for ir, vals in sorted(seen.items())]
 
 
-def _sample_at_grid(xs_raw, ys_raw, step: float = 0.001):
+def _sample_at_grid(xs_raw, ys_raw, step: float = 0.02):
     if len(xs_raw) == 0:
         return np.array([]), np.array([])
     x_max = xs_raw.max()
@@ -251,7 +253,7 @@ METRIC_CONFIG = {
         "col":   1,
         "ylabel": "Packet Latency Average (cycles)",
         "title":  "Latency vs Injection Rate",
-        "ylim":  (0, 10000),
+        "ylim":  (0, 5000),
     },
     "throughput": {
         "col":   2,
@@ -292,6 +294,9 @@ def _run_one(exp: dict, args, i: int, n: int) -> dict:
     overrides["sim_type"]          = "latency"
     overrides["traffic"]           = args.traffic
     overrides["injection_process"] = args.injection_process
+    
+    # Read/Write config injection
+    overrides["use_read_write"]    = "1" if args.use_read_write else "0"
 
     for kv in (args.override or []):
         k, _, v = kv.partition("=")
@@ -474,10 +479,11 @@ def cmd_plot(args) -> None:
         print("No data to plot.")
         return
 
-    # Build plot
-    cmap        = plt.cm.tab10
-    markers     = ["o", "s", "^", "D", "v", "P", "X", "*", "h", "<"]
-    linestyles  = ["-", "--", "-.", ":", "-", "--", "-.", ":", "-", "--"]
+    # Build plot (Supports up to 20 configs without duplicate styles)
+    cmap        = plt.cm.tab20
+    markers     = ["o", "s", "^", "D", "v", "P", "X", "*", "h", "<",
+                   ">", "p", "H", "d", "1", "2", "3", "4", "8", "+"]
+    linestyles  = ["-", "--", "-.", ":"] * 5
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -489,9 +495,11 @@ def cmd_plot(args) -> None:
         xs_raw = np.array([r[0] for r in rows])
         ys_raw = np.array([r[col] for r in rows])
         xs, ys = _sample_at_grid(xs_raw, ys_raw)
+        
+        # Cycle through up to 20 unique marker/color combinations
         ax.plot(
             xs, ys,
-            color=cmap((i % 10) / 10),
+            color=cmap(i % 20),
             linestyle=linestyles[i % len(linestyles)],
             marker=markers[i % len(markers)],
             markersize=5, linewidth=1.5,
@@ -501,7 +509,10 @@ def cmd_plot(args) -> None:
     ax.set_xlabel("Injection Rate (flits/node/cycle)", fontsize=12)
     ax.set_ylabel(mcfg["ylabel"], fontsize=12)
     ax.set_title(mcfg["title"], fontsize=13)
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
+    
+    # Legend max layout tweaks to fit many items
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.9, ncol=1 if len(entries) <= 10 else 2)
+    
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_locator(ticker.MultipleLocator(0.1))
     ax.xaxis.set_minor_locator(ticker.MultipleLocator(0.02))
@@ -556,11 +567,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="booksim injection_process= value  (default: gpu_bernoulli)")
     p.add_argument("--traffic-label", default=None,
                    metavar="LABEL",
-                   help="Directory label for traffic (default: same as --traffic)")
+                   help="Directory label for traffic (default: same as --traffic, appends _rw if use-read-write)")
+    p.add_argument("--use-read-write", action="store_true",
+                   help="Enable use_read_write=1 for request/reply separated traffic sizes")
     p.add_argument("--is-fabric", type=int, default=1, choices=[0, 1],
                    help="is_fabric: 0=no MC-MC links, 1=enable fabric  (default: 1)")
-    p.add_argument("--baseline-ratio", type=float, default=0.2,
-                   help="baseline_ratio (L2 hit rate, default: 0.5)")
+    p.add_argument("--baseline-ratio", type=float, default=0.0,
+                   help="baseline_ratio (L2 hit rate, default: 0.0)")
     p.add_argument("--override", nargs="*", default=[], metavar="KEY=VALUE",
                    help="Extra config overrides, e.g. --override num_vcs=8 near_min_strict=1")
     p.add_argument("--base-config", default=BASE_CONFIG,
@@ -573,8 +586,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"Output root  (default: {RESULT_DIR})")
     p.add_argument("--initial-step", default="0.05",
                    help="sweep.sh initial_step env var  (default: 0.05)")
-    p.add_argument("--minimum-step", default="0.00005",
-                   help="sweep.sh minimum_step env var  (default: 0.00005)")
+    p.add_argument("--minimum-step", default="0.0002",
+                   help="sweep.sh minimum_step env var  (default: 0.0002)")
     p.add_argument("--workers", type=int, default=os.cpu_count(), metavar="N",
                    help=f"Number of parallel workers (default: {os.cpu_count()})")
     p.add_argument("--skip-existing", action="store_true",
@@ -593,9 +606,11 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--bandwidth", nargs="+", metavar="BW",
                    help="Bandwidth(s) to include (default: all available)")
     q.add_argument("--traffic-label", default="gpu", metavar="LABEL",
-                   help="Traffic label directory  (default: gpu)")
+                   help="Traffic label directory (default: gpu or gpu_rw based on --use-read-write)")
+    q.add_argument("--use-read-write", action="store_true",
+                   help="Look for the _rw traffic-label suffix automatically")
     q.add_argument("--routing", nargs="+", metavar="KEY",
-                   help="Routing(s) to plot: baseline min_adaptive near_min_adaptive ugal valiant "
+                   help="Routing(s) to plot: baseline min_adaptive near_min_adaptive near_min_random ugal valiant "
                         "(or already-expanded keys like near_min_adaptive_nmk2_nmp1.5)")
     q.add_argument("--near-min-k", nargs="+", type=int, default=[2], metavar="K",
                    help="near_min_k values when --routing includes near_min_adaptive/random (default: 2)")
@@ -625,8 +640,15 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.cmd == "run" and args.traffic_label is None:
+    # Automatically set traffic labels based on read/write status
+    if args.cmd == "run" and getattr(args, 'traffic_label', None) is None:
         args.traffic_label = args.traffic
+        if args.use_read_write:
+            args.traffic_label += "_rw"
+            
+    if args.cmd == "plot" and getattr(args, 'traffic_label', "gpu") == "gpu":
+        if getattr(args, 'use_read_write', False):
+            args.traffic_label = "gpu_rw"
 
     if args.cmd == "run":
         cmd_run(args)

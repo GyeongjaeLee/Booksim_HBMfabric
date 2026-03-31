@@ -30,6 +30,8 @@ protected:
   double _moe_total_mb;
   int _flit_width_bytes;
 
+  double _moe_injection_rate;
+
   void _LoadTrafficMatrix(const Configuration &config);
 
   virtual void _Inject() override;

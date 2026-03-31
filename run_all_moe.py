@@ -3,17 +3,21 @@
 Run all MoE simulations: structures x bandwidths x scenarios x routings x k x sizes.
 
 Output directory structure:
-  RESULT_DIR/{Structure}/{Bandwidth}/{Scheme}_{routing}[_nmk{K}_nmp{P}]/k{K}_{Size}MiB.txt
+  RESULT_DIR/{MatrixType}/{Structure}/{Bandwidth}/{Scheme}_{routing}[_nmk{K}_nmp{P}]/k{K}_{Size}MiB[_ir{IR}].txt
 
 ============================================================
   Usage examples
 ============================================================
-  # Run specific structure + bandwidth with near-min params
+  # Run specific structure + bandwidth with near-min params and custom injection rate
   python3 run_all_moe.py --structures B100_Global --bandwidths B200+HBM3e \
-                         --routings near_min_random --near-min-k 2 --near-min-p 1.5
+                         --routings near_min_random near_min_adaptive \
+                         --near-min-k 1 2 \
+                         --near-min-p 0.0 0.5 1.0 \
+                         --injection-rate 0.5 \
+                         --matrix-type GPU-HBM
 
   # Collect results from directories into a single CSV
-  python3 run_all_moe.py --collect ./results/B100_Global
+  python3 run_all_moe.py --collect ./results/moe/GPU-HBM/B100_Global
 """
 
 import os
@@ -51,7 +55,7 @@ DEFAULT_ROUTINGS = ["near_min_adaptive"]
 SCENARIOS = [
     {
         "label": "Baseline",
-        "hybrid_scheme": False,
+        "hybrid_scheme": True,
         "is_fabric": 0,
         "matrix_prefix": "moe_matrix_baseline",
     },
@@ -70,7 +74,7 @@ SCENARIOS = [
 ]
 
 BASE_CONFIG = "./src/examples/hbmnet_accelsim_config"
-MATRIX_DIR = "./src/examples/moe/GPU-HBM/"
+MATRIX_DIR = "./src/examples/moe"
 RESULT_DIR = "./results/moe"
 
 
@@ -113,10 +117,13 @@ def scheme_routing_dirname(scenario, routing, nm_k, nm_p):
         return f"{scenario['label']}_baseline"
 
 
-def get_result_path(result_dir, struct_name, bw_name, sr_dirname, k, size_mib):
-    """Get full path for a result file."""
-    return os.path.join(result_dir, struct_name, bw_name, sr_dirname,
-                        f"k{k}_{size_mib}MiB.txt")
+def get_result_path(result_dir, struct_name, bw_name, sr_dirname, k, size_mib, ir=1.0):
+    """Get full path for a result file, appending injection rate if not 1.0."""
+    if ir == 1.0:
+        filename = f"k{k}_{size_mib}MiB.txt"
+    else:
+        filename = f"k{k}_{size_mib}MiB_ir{ir}.txt"
+    return os.path.join(result_dir, struct_name, bw_name, sr_dirname, filename)
 
 
 def routings_for_scenario(scenario, active_routings):
@@ -127,10 +134,10 @@ def routings_for_scenario(scenario, active_routings):
         return ["baseline"]
 
 
-def find_matrix_file(prefix, k, size_mib):
-    """Find traffic matrix file."""
+def find_matrix_file(matrix_dir, struct_name, matrix_type, prefix, k, size_mib):
+    """Find traffic matrix file inside the MatrixType folder."""
     for ext in [".txt", ""]:
-        path = os.path.join(MATRIX_DIR, f"{prefix}_k{k}_{size_mib}MiB{ext}")
+        path = os.path.join(matrix_dir, struct_name, matrix_type, f"{prefix}_k{k}_{size_mib}MiB{ext}")
         if os.path.exists(path):
             return path
     return None
@@ -190,6 +197,10 @@ def extract_results(text):
     def sint(pattern):
         m = re.search(pattern, text)
         return int(m.group(1)) if m else None
+
+    # Extract injection_rate from config dump
+    m_ir = re.search(r'injection_rate\s*=\s*([\d.]+)', text)
+    r['injection_rate'] = float(m_ir.group(1)) if m_ir else 1.0
 
     r['total_mb'] = sfloat(r'moe_total_mb\s*=\s*([\d.]+)')
     r['total_packets'] = sint(r'Total packets\s*=\s*(\d+)')
@@ -281,7 +292,7 @@ def _fmt_pct(val):
 # ============================================================
 CSV_FIELDS = [
     'structure', 'bandwidth', 'scenario', 'routing_function',
-    'nm_k', 'nm_p',  # Near-min parameters
+    'nm_k', 'nm_p', 'injection_rate',  # Near-min & Inject parameters
     'k', 'size_mib', 'total_mb',
     'total_packets', 'time_taken',
     'pkt_lat_avg', 'pkt_lat_min', 'pkt_lat_max',
@@ -316,13 +327,14 @@ def run_single_scenario(job):
     bw_name     = job['bandwidth']
     result_dir  = job['result_dir']
 
-    nm_k = args.near_min_k
-    nm_p = args.near_min_p
+    nm_k        = job['nm_k']
+    nm_p        = job['nm_p']
+    ir          = args.injection_rate
 
     sr_dir = scheme_routing_dirname(scenario, routing, nm_k, nm_p)
-    result_path = get_result_path(result_dir, struct_name, bw_name, sr_dir, k, size_mib)
+    result_path = get_result_path(result_dir, struct_name, bw_name, sr_dir, k, size_mib, ir)
     display_path = os.path.relpath(result_path, result_dir)
-    matrix_path = find_matrix_file(scenario["matrix_prefix"], k, size_mib)
+    matrix_path = find_matrix_file(MATRIX_DIR, struct_name, args.matrix_type, scenario["matrix_prefix"], k, size_mib)
     base_label = scenario["label"]
 
     # ── Parse-only mode ──
@@ -346,7 +358,7 @@ def run_single_scenario(job):
     if matrix_path is None:
         return {'status': 'skipped', 'row': None,
                 'msg': f"[{job_num}/{total_jobs}] [SKIP] Matrix not found: "
-                       f"{scenario['matrix_prefix']}_k{k}_{size_mib}MiB"}
+                       f"{scenario['matrix_prefix']}_k{k}_{size_mib}MiB in {struct_name}/{args.matrix_type}"}
 
     # ── Skip-existing mode ──
     if args.skip_existing and os.path.exists(result_path):
@@ -374,20 +386,22 @@ def run_single_scenario(job):
         "is_fabric": str(scenario["is_fabric"]),
         "traffic_matrix_file": matrix_path,
         "moe_total_mb": str(total_mb),
+        "injection_rate": str(ir),
+        "routing_function": "hybrid",
+        "hybrid_routing": routing,
+        "sim_type": "moe_accelsim",           # Added for MoE simulation
+        "traffic": "uniform",                 # Added for MoE simulation
+        "injection_process": "bernoulli"      # Added for MoE simulation
     }
+    
     overrides.update(struct_to_overrides(struct_name))
     overrides.update(bw_to_overrides(bw_name))
 
-    if scenario.get("hybrid_scheme", False):
-        overrides["routing_function"] = "hybrid"
-        overrides["hybrid_routing"] = routing
-        if routing == "near_min_adaptive":
-            overrides["near_min_k"] = str(nm_k)
-            overrides["near_min_penalty"] = str(nm_p)
-        elif routing == "near_min_random":
-            overrides["near_min_k"] = str(nm_k)
-    else:
-        overrides["routing_function"] = "baseline"
+    if routing == "near_min_adaptive":
+        overrides["near_min_k"] = str(nm_k)
+        overrides["near_min_penalty"] = str(nm_p)
+    elif routing == "near_min_random":
+        overrides["near_min_k"] = str(nm_k)
 
     # ── Write temp config & run ──
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
@@ -408,7 +422,7 @@ def run_single_scenario(job):
     row = None
     msg = header_msg
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout)
         text = proc.stdout + proc.stderr
         with open(result_path, 'w') as f:
             f.write(text)
@@ -438,7 +452,6 @@ def run_single_scenario(job):
 def _make_row(struct_name, bw_name, scenario_label, routing, nm_k, nm_p, k, size_mib,
               total_mb, matrix_path, result_path, parsed):
     """Build a CSV row dict from parsed results."""
-    # nm_p is irrelevant for near_min_random
     eff_nm_p = "" if routing == "near_min_random" else nm_p
     eff_nm_k = nm_k if "near_min" in routing else ""
 
@@ -446,6 +459,7 @@ def _make_row(struct_name, bw_name, scenario_label, routing, nm_k, nm_p, k, size
         'structure': struct_name, 'bandwidth': bw_name,
         'scenario': scenario_label, 'routing_function': routing,
         'nm_k': eff_nm_k, 'nm_p': eff_nm_p,
+        'injection_rate': parsed.get('injection_rate', 1.0),
         'k': k, 'size_mib': size_mib, 'total_mb': total_mb,
         'matrix_file': matrix_path, 'result_file': result_path,
     }
@@ -453,9 +467,6 @@ def _make_row(struct_name, bw_name, scenario_label, routing, nm_k, nm_p, k, size
     return row
 
 
-# ============================================================
-#  Sort key for canonical directory-path ordering
-# ============================================================
 def _sort_key(row):
     struct_order = {name: i for i, name in enumerate(STRUCTURES.keys())}
     bw_order = {name: i for i, name in enumerate(BANDWIDTHS.keys())}
@@ -466,6 +477,9 @@ def _sort_key(row):
     
     nm_p = row.get('nm_p', 0.0)
     nm_p_val = 0.0 if nm_p in ('', None) else float(nm_p)
+
+    ir = row.get('injection_rate', 1.0)
+    ir_val = 1.0 if ir in ('', None) else float(ir)
     
     return (
         struct_order.get(row.get('structure', ''), 999),
@@ -474,16 +488,14 @@ def _sort_key(row):
         row.get('routing_function', ''),
         nm_k_val,
         nm_p_val,
+        ir_val,
         row.get('k', 0),
         row.get('size_mib', 0),
     )
 
 
-# ============================================================
-#  Collect Mode: parse existing result files into CSV
-# ============================================================
 def collect_results(dirs, csv_path):
-    """Walk directories, parse all k{K}_{Size}MiB.txt files, produce CSV."""
+    """Walk directories, parse all k{K}_{Size}MiB[_ir{IR}].txt files, produce CSV."""
     rows = []
     for d in dirs:
         if not os.path.isdir(d):
@@ -493,21 +505,19 @@ def collect_results(dirs, csv_path):
             for fname in sorted(files):
                 if not fname.endswith('.txt') or fname.startswith('.'):
                     continue
-                m = re.match(r'k(\d+)_(\d+)MiB\.txt$', fname)
+                # Match k{K}_{Size}MiB.txt OR k{K}_{Size}MiB_ir{IR}.txt
+                m = re.match(r'k(\d+)_(\d+)MiB(?:_ir([\d.]+))?\.txt$', fname)
                 if not m:
                     continue
                 fpath = os.path.join(root, fname)
                 k_val = int(m.group(1))
                 size_mib = int(m.group(2))
 
-                # Extract metadata from directory structure:
-                #   .../{Structure}/{Bandwidth}/{Scheme_routing}/k{K}_{Size}MiB.txt
                 parts = os.path.normpath(fpath).split(os.sep)
                 sr_name     = parts[-2] if len(parts) >= 2 else ''
                 bw_name     = parts[-3] if len(parts) >= 3 else ''
                 struct_name = parts[-4] if len(parts) >= 4 else ''
 
-                # Parse scheme and routing from Scheme_routing dirname
                 scheme, routing = '', sr_name
                 nm_k, nm_p = "", ""
                 for s in ['Offloading', 'Baseline', 'Fabric']:
@@ -555,16 +565,12 @@ def collect_results(dirs, csv_path):
 
     print(f"Collected {len(rows)} results -> {csv_path}")
 
-    # Print summary table
     if rows:
         _print_result_table(rows)
 
     return rows
 
 
-# ============================================================
-#  Plan Summary
-# ============================================================
 def print_plan_summary(active_structs, active_bws, active_scenarios, active_routings,
                        active_k_values, active_sizes, result_dir, args):
     print()
@@ -579,7 +585,6 @@ def print_plan_summary(active_structs, active_bws, active_scenarios, active_rout
     if mode_flags:
         print(f"  Mode: {', '.join(mode_flags)}")
 
-    # Print bandwidth port mappings
     print()
     print("  Bandwidth port mappings (1 unit = 7 ports):")
     for bw_name in active_bws:
@@ -590,7 +595,7 @@ def print_plan_summary(active_structs, active_bws, active_scenarios, active_rout
     print()
 
     hdr = (f"  {'#':>4}  {'Structure':<18} {'Bandwidth':<18} {'Scenario':<12} "
-           f"{'Routing':<25} {'k':>3} {'Size':>6}  {'Matrix':^8}  {'Result':^8}  {'MatrixFile'}")
+           f"{'Routing':<25} {'IR':>4} {'k':>3} {'Size':>6}  {'Matrix':^8}  {'Result':^8}  {'MatrixFile'}")
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
 
@@ -601,42 +606,53 @@ def print_plan_summary(active_structs, active_bws, active_scenarios, active_rout
             for scenario in active_scenarios:
                 routings = routings_for_scenario(scenario, active_routings)
                 for routing in routings:
-                    sr_dir = scheme_routing_dirname(scenario, routing, args.near_min_k, args.near_min_p)
-                    
-                    # Display routing string nicely
-                    disp_routing = routing
                     if routing == "near_min_adaptive":
-                        disp_routing += f" (k={args.near_min_k}, p={args.near_min_p})"
+                        k_list = args.near_min_k
+                        p_list = args.near_min_p
                     elif routing == "near_min_random":
-                        disp_routing += f" (k={args.near_min_k})"
+                        k_list = args.near_min_k
+                        p_list = [""]
+                    else:
+                        k_list = [""]
+                        p_list = [""]
+                        
+                    for nm_k in k_list:
+                        for nm_p in p_list:
+                            sr_dir = scheme_routing_dirname(scenario, routing, nm_k, nm_p)
+                            
+                            disp_routing = routing
+                            if routing == "near_min_adaptive":
+                                disp_routing += f" (k={nm_k}, p={nm_p})"
+                            elif routing == "near_min_random":
+                                disp_routing += f" (k={nm_k})"
 
-                    for k in active_k_values:
-                        for size_mib in active_sizes:
-                            job_num += 1
-                            result_path = get_result_path(result_dir, struct_name, bw_name,
-                                                          sr_dir, k, size_mib)
-                            matrix_path = find_matrix_file(scenario["matrix_prefix"], k, size_mib)
+                            for k in active_k_values:
+                                for size_mib in active_sizes:
+                                    job_num += 1
+                                    result_path = get_result_path(result_dir, struct_name, bw_name,
+                                                                  sr_dir, k, size_mib, args.injection_rate)
+                                    matrix_path = find_matrix_file(MATRIX_DIR, struct_name, args.matrix_type, scenario["matrix_prefix"], k, size_mib)
 
-                            if matrix_path is None:
-                                matrix_tag = "[MISS]"
-                                result_tag = "  -   "
-                                counts['no_matrix'] += 1
-                                matrix_display = (f"{scenario['matrix_prefix']}_k{k}"
-                                                  f"_{size_mib}MiB (NOT FOUND)")
-                            else:
-                                matrix_tag = "[ OK ]"
-                                matrix_display = os.path.basename(matrix_path)
-                                if os.path.exists(result_path):
-                                    result_tag = "[EXISTS]"
-                                    counts['exists'] += 1
-                                else:
-                                    result_tag = "[ NEW ]"
-                                    counts['new'] += 1
+                                    if matrix_path is None:
+                                        matrix_tag = "[MISS]"
+                                        result_tag = "  -   "
+                                        counts['no_matrix'] += 1
+                                        matrix_display = (f"{scenario['matrix_prefix']}_k{k}"
+                                                          f"_{size_mib}MiB (NOT FOUND)")
+                                    else:
+                                        matrix_tag = "[ OK ]"
+                                        matrix_display = os.path.basename(matrix_path)
+                                        if os.path.exists(result_path):
+                                            result_tag = "[EXISTS]"
+                                            counts['exists'] += 1
+                                        else:
+                                            result_tag = "[ NEW ]"
+                                            counts['new'] += 1
 
-                            print(f"  {job_num:>4}  {struct_name:<18} {bw_name:<18} "
-                                  f"{scenario['label']:<12} {disp_routing:<25} {k:>3} "
-                                  f"{str(size_mib)+'MiB':>6}  {matrix_tag}  {result_tag}  "
-                                  f"{matrix_display}")
+                                    print(f"  {job_num:>4}  {struct_name:<18} {bw_name:<18} "
+                                          f"{scenario['label']:<12} {disp_routing:<25} {args.injection_rate:>4.2f} {k:>3} "
+                                          f"{str(size_mib)+'MiB':>6}  {matrix_tag}  {result_tag}  "
+                                          f"{matrix_display}")
 
     print()
     total = counts['new'] + counts['exists'] + counts['no_matrix']
@@ -648,14 +664,11 @@ def print_plan_summary(active_structs, active_bws, active_scenarios, active_rout
     print()
 
 
-# ============================================================
-#  Result Table
-# ============================================================
 def _print_result_table(rows):
     """Print a formatted result summary table."""
     print()
     hdr = (f"{'Structure':<18} {'Bandwidth':<18} {'Scenario':<12} {'Routing':<18} "
-           f"{'k':>3} {'Size':>6} {'Packets':>10} {'Cycles':>12} {'AvgLat':>9} {'Hops':>6} "
+           f"{'IR':>4} {'k':>3} {'Size':>6} {'Packets':>10} {'Cycles':>12} {'AvgLat':>9} {'Hops':>6} "
            f"{'NM%':>6} {'NMPath%':>8} "
            f"{'XX_sat':>7} {'XMC_sat':>8} {'MC_sat':>7} {'EscVC%':>7}")
     print(hdr)
@@ -664,8 +677,11 @@ def _print_result_table(rows):
         def _s(key, default=''):
             v = row.get(key, default)
             return '' if v is None else str(v)
+        
+        ir_str = f"{float(row.get('injection_rate', 1.0)):.2f}"
+        
         print(f"{_s('structure'):<18} {_s('bandwidth'):<18} {_s('scenario'):<12} "
-              f"{_s('routing_function'):<18} {_s('k'):>3} {_s('size_mib')+'M':>6} "
+              f"{_s('routing_function'):<18} {ir_str:>4} {_s('k'):>3} {_s('size_mib')+'M':>6} "
               f"{_s('total_packets'):>10} {_s('time_taken'):>12} {_s('pkt_lat_avg'):>9} {_s('hops_avg'):>6} "
               f"{_fmt_pct(row.get('nearmin_nonmin_pct')):>6} "
               f"{_fmt_pct(row.get('nearmin_path_pct')):>8} "
@@ -675,9 +691,6 @@ def _print_result_table(rows):
               f"{_fmt_pct(row.get('escape_vc_pct')):>7}")
 
 
-# ============================================================
-#  Main
-# ============================================================
 def main():
     global RESULT_DIR
     parser = argparse.ArgumentParser(
@@ -688,10 +701,7 @@ def main():
             "Bandwidths:  " + ", ".join(BANDWIDTHS.keys()),
             "Routings:    " + ", ".join(ALL_ROUTING_FUNCTIONS),
             "",
-            "Output: RESULT_DIR/{Structure}/{Bandwidth}/{Scheme}_{routing}[_nmk{K}_nmp{P}]/k{K}_{Size}MiB.txt",
-            "",
-            "Baseline scheme always uses routing_function=baseline.",
-            "Fabric/Offloading use routing_function=hybrid; --routings selects hybrid_routing.",
+            "Output: RESULT_DIR/{MatrixType}/{Structure}/{Bandwidth}/{Scheme}_{routing}[_nmk{K}_nmp{P}]/k{K}_{Size}MiB[_ir{IR}].txt",
         ])
     )
     parser.add_argument('--dry-run', action='store_true', help='Print commands only')
@@ -704,46 +714,28 @@ def main():
                         help='Skip confirmation prompt')
     parser.add_argument('--result-dir', default=RESULT_DIR,
                         help=f'Result output directory (default: {RESULT_DIR})')
+    parser.add_argument('--timeout', type=int, default=None,
+                        help='Subprocess timeout in seconds (default: None, wait indefinitely)')
 
-    # Dimension filters
-    parser.add_argument('--structures', nargs='+', metavar='STRUCT',
-                        help=f'Structures to test. Choices: {", ".join(STRUCTURES.keys())}',
-                        default=None)
-    parser.add_argument('--bandwidths', nargs='+', metavar='BW',
-                        help=f'Bandwidth configs. Choices: {", ".join(BANDWIDTHS.keys())}',
-                        default=None)
-    parser.add_argument('--schemes', nargs='+', metavar='SCHEME',
-                        help='Schemes: Baseline, Fabric, Offloading',
-                        default=None)
-    parser.add_argument('--routings', nargs='+', metavar='ROUTING',
-                        help=(f'Routing functions for Fabric/Offloading hybrid_routing. '
-                              f'Baseline always uses "baseline". '
-                              f'Choices: {", ".join(ALL_ROUTING_FUNCTIONS)}'),
-                        default=None)
-    parser.add_argument('--k-values', nargs='+', type=int,
-                        help='k values (default: 1 2 4 8 16)', default=None)
-    parser.add_argument('--sizes', nargs='+', type=int,
-                        help='Sizes in MiB (default: 8 16 32 64 128 256)', default=None)
+    parser.add_argument('--structures', nargs='+', metavar='STRUCT', default=None)
+    parser.add_argument('--bandwidths', nargs='+', metavar='BW', default=None)
+    parser.add_argument('--schemes', nargs='+', metavar='SCHEME', default=None)
+    parser.add_argument('--routings', nargs='+', metavar='ROUTING', default=None)
+    parser.add_argument('--k-values', nargs='+', type=int, default=None)
+    parser.add_argument('--sizes', nargs='+', type=int, default=None)
     
-    # Near-min custom params
-    parser.add_argument('--near-min-k', type=int, default=2,
-                        help='Near-min routing budget k (default: 2)')
-    parser.add_argument('--near-min-p', type=float, default=1.0,
-                        help='Near-min routing penalty multiplier (default: 1.0)')
+    parser.add_argument('--near-min-k', nargs='+', type=int, default=[2])
+    parser.add_argument('--near-min-p', nargs='+', type=float, default=[1.0])
+    parser.add_argument('--injection-rate', type=float, default=1.0,
+                        help='Injection rate for MoE traffic (default: 1.0)')
+    parser.add_argument('--matrix-type', choices=['GPU-HBM', 'End-to-End'], default='GPU-HBM')
 
-    # Collect mode
-    parser.add_argument('--collect', nargs='+', metavar='DIR',
-                        help='Collect all result .txt files under given directories into CSV')
-    parser.add_argument('--collect-output', metavar='CSV',
-                        help='Output CSV path for --collect (default: RESULT_DIR/collected.csv)',
-                        default=None)
+    parser.add_argument('--collect', nargs='+', metavar='DIR')
+    parser.add_argument('--collect-output', metavar='CSV', default=None)
 
     args = parser.parse_args()
+    RESULT_DIR = os.path.join(args.result_dir, args.matrix_type)
 
-    # Update global RESULT_DIR
-    RESULT_DIR = args.result_dir
-
-    # ── Collect mode ──
     if args.collect:
         csv_path = args.collect_output or os.path.join(RESULT_DIR, "collected.csv")
         collect_results(args.collect, csv_path)
@@ -751,44 +743,23 @@ def main():
 
     os.makedirs(RESULT_DIR, exist_ok=True)
 
-    # ── Validate options ──
     active_structs = list(STRUCTURES.keys())
     if args.structures:
-        invalid = [s for s in args.structures if s not in STRUCTURES]
-        if invalid:
-            print(f"Error: Unknown structure(s): {invalid}")
-            print(f"  Valid: {list(STRUCTURES.keys())}")
-            sys.exit(1)
         active_structs = args.structures
 
     active_bws = list(BANDWIDTHS.keys())
     if args.bandwidths:
-        invalid = [b for b in args.bandwidths if b not in BANDWIDTHS]
-        if invalid:
-            print(f"Error: Unknown bandwidth(s): {invalid}")
-            print(f"  Valid: {list(BANDWIDTHS.keys())}")
-            sys.exit(1)
         active_bws = args.bandwidths
 
     active_scenarios = SCENARIOS
     if args.schemes:
         wanted = [s.lower() for s in args.schemes]
         active_scenarios = [s for s in SCENARIOS if s["label"].lower() in wanted]
-        if not active_scenarios:
-            print(f"Error: No matching schemes: {args.schemes}")
-            sys.exit(1)
 
     active_routings = args.routings if args.routings else DEFAULT_ROUTINGS
-    invalid = [r for r in active_routings if r not in ALL_ROUTING_FUNCTIONS]
-    if invalid:
-        print(f"Error: Unknown routing(s): {invalid}")
-        print(f"  Valid: {ALL_ROUTING_FUNCTIONS}")
-        sys.exit(1)
-
     active_k = args.k_values or K_VALUES
     active_sizes = args.sizes or SIZES_MIB
 
-    # ── Build job list ──
     jobs = []
     job_num = 0
     for struct_name in active_structs:
@@ -796,27 +767,40 @@ def main():
             for scenario in active_scenarios:
                 routings = routings_for_scenario(scenario, active_routings)
                 for routing in routings:
-                    for k in active_k:
-                        for size_mib in active_sizes:
-                            job_num += 1
-                            jobs.append({
-                                'structure': struct_name,
-                                'bandwidth': bw_name,
-                                'scenario': scenario,
-                                'routing': routing,
-                                'k': k,
-                                'size_mib': size_mib,
-                                'args': args,
-                                'result_dir': RESULT_DIR,
-                                'job_num': job_num,
-                                'total_jobs': 0,
-                            })
+                    if routing == "near_min_adaptive":
+                        k_list = args.near_min_k
+                        p_list = args.near_min_p
+                    elif routing == "near_min_random":
+                        k_list = args.near_min_k
+                        p_list = [""]
+                    else:
+                        k_list = [""]
+                        p_list = [""]
+                        
+                    for nm_k in k_list:
+                        for nm_p in p_list:
+                            for k in active_k:
+                                for size_mib in active_sizes:
+                                    job_num += 1
+                                    jobs.append({
+                                        'structure': struct_name,
+                                        'bandwidth': bw_name,
+                                        'scenario': scenario,
+                                        'routing': routing,
+                                        'nm_k': nm_k,
+                                        'nm_p': nm_p,
+                                        'k': k,
+                                        'size_mib': size_mib,
+                                        'args': args,
+                                        'result_dir': RESULT_DIR,
+                                        'job_num': job_num,
+                                        'total_jobs': 0,
+                                    })
 
     total_jobs = len(jobs)
     for j in jobs:
         j['total_jobs'] = total_jobs
 
-    # ── Plan summary ──
     print_plan_summary(active_structs, active_bws, active_scenarios, active_routings,
                        active_k, active_sizes, RESULT_DIR, args)
 
@@ -827,14 +811,6 @@ def main():
             print("\nCancelled.")
             sys.exit(0)
         print()
-
-    print(f"Structures: {active_structs}")
-    print(f"Bandwidths: {active_bws}")
-    print(f"Schemes:    {[s['label'] for s in active_scenarios]}")
-    print(f"Routings:   {active_routings}  (Baseline always uses 'baseline')")
-    print(f"k values:   {active_k}")
-    print(f"Sizes:      {active_sizes}")
-    print(f"Starting {total_jobs} jobs with {args.workers} workers...\n")
 
     csv_rows = []
     succeeded, skipped, failed = 0, 0, 0
@@ -856,9 +832,7 @@ def main():
             executor.shutdown(wait=False, cancel_futures=True)
             sys.exit(1)
 
-    # ── Sort and write CSV ──
     csv_rows.sort(key=_sort_key)
-
     csv_path = os.path.join(RESULT_DIR, "summary.csv")
     with open(csv_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction='ignore')
@@ -866,15 +840,8 @@ def main():
         for row in csv_rows:
             writer.writerow(row)
 
-    print()
-    print("=" * 130)
-    print(f"Total: {total_jobs} | Succeeded: {succeeded} | Failed: {failed} | Skipped: {skipped}")
-    print(f"Summary CSV: {csv_path}")
-    print("=" * 130)
-
     if csv_rows:
         _print_result_table(csv_rows)
-
 
 if __name__ == '__main__':
     main()
