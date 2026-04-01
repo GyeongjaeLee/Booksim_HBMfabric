@@ -1154,7 +1154,7 @@ static void accel_add_hbm_to_mc_ports(int cur, OutputSet *outputs) {
   int port = ports[RandomInt(ports.size() - 1)];
   if (gNumVCs > 1)
     outputs->AddRange(port, 1, gNumVCs - 1, 1);
-  outputs->AddRange(port, 0, 0, 0);
+  // outputs->AddRange(port, 0, 0, 0);
 }
 
 // ============================================================
