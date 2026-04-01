@@ -73,11 +73,11 @@ mc_hbm_latency = 35;      // miss path: MC ↔ HBM (models DRAM access)
 mc_mc_latency = 85;         // miss path fabric: MC ↔ MC
 
 // Link bandwidths (parallel ports per link pair)
-xbar_xbar_bandwidth = 70;
-xbar_hbm_bandwidth = 7;   // hit path
-xbar_mc_bandwidth = 7;    // miss path entry
-mc_hbm_bandwidth = 7;     // equal xbar_hbm_bandwidth for fairness
-mc_mc_bandwidth = 7;       // fabric
+xbar_xbar_bandwidth = 28;
+xbar_hbm_bandwidth = 8;   // hit path
+xbar_mc_bandwidth = 8;    // miss path entry
+mc_hbm_bandwidth = 13;     // equal xbar_hbm_bandwidth for fairness
+mc_mc_bandwidth = 8;       // fabric
 
 // Flow control
 num_vcs     = 4;
@@ -108,13 +108,27 @@ traffic = gpu;
 injection_process = gpu_bernoulli;
 packet_size = 1;
 
-use_read_write = 0;
+use_read_write = 1;
 
-latency_thres = 20000.0;
+latency_thres = 50000.0;
 
 // Simulation
 sim_type = latency;
 // sim_type = moe_accelsim;
-injection_rate = 0.5;
+injection_rate = 0.499979;
 flit_width_bytes = 40;
 traffic_matrix_file = ./examples/end-to-end/moe_matrix_H2H_k16_128MiB;
+
+read_request_begin_vc = 0;
+read_request_end_vc = 3;
+read_reply_begin_vc = 0;
+read_reply_end_vc = 3;
+write_request_begin_vc = 0;
+write_request_end_vc = 3;
+write_reply_begin_vc = 0;
+write_reply_begin_vc = 3;
+
+read_request_size = 1;
+read_reply_size = 1;
+write_request_size = 1;
+write_reply_size = 1;

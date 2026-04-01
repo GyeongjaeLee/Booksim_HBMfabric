@@ -238,7 +238,7 @@ def parse_sweep_file(filepath: str) -> list:
     return [(ir,) + vals for ir, vals in sorted(seen.items())]
 
 
-def _sample_at_grid(xs_raw, ys_raw, step: float = 0.02):
+def _sample_at_grid(xs_raw, ys_raw, step: float = 0.002):
     if len(xs_raw) == 0:
         return np.array([]), np.array([])
     x_max = xs_raw.max()
@@ -253,7 +253,7 @@ METRIC_CONFIG = {
         "col":   1,
         "ylabel": "Packet Latency Average (cycles)",
         "title":  "Latency vs Injection Rate",
-        "ylim":  (0, 5000),
+        "ylim":  (0, 10000),
     },
     "throughput": {
         "col":   2,
@@ -494,7 +494,7 @@ def cmd_plot(args) -> None:
             continue
         xs_raw = np.array([r[0] for r in rows])
         ys_raw = np.array([r[col] for r in rows])
-        xs, ys = _sample_at_grid(xs_raw, ys_raw)
+        xs, ys = _sample_at_grid(xs_raw, ys_raw, step=args.grid_step)
         
         # Cycle through up to 20 unique marker/color combinations
         ax.plot(
@@ -632,6 +632,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Output PNG path (auto-named if omitted)")
     q.add_argument("--no-save", action="store_true",
                    help="Show plot without saving PNG")
+    q.add_argument("--grid-step", type=float, default=0.002,
+                   help="Interpolation step for plotting (default: 0.002)")
 
     return parser
 

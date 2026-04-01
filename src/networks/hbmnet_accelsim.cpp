@@ -1129,7 +1129,8 @@ static void accel_valiant_decision(const Flit *f, int cur, int miss_target) {
 //  Deterministic MC↔HBM hop helper
 //  Used for: HBM→MC (L2 miss first hop) and MC→HBM (miss final hop)
 // ============================================================
-static void accel_add_mc_hbm_ports(int cur, OutputSet *outputs) {
+// MC→HBM (eject hop): all VCs are fine, no priority needed.
+static void accel_add_mc_to_hbm_ports(int cur, OutputSet *outputs) {
   vector<int> ports;
   for (size_t i = 0; i < gHBMNetAccelAdj[cur].size(); i++) {
     const AccelAdjEntry &e = gHBMNetAccelAdj[cur][i];
@@ -1140,6 +1141,32 @@ static void accel_add_mc_hbm_ports(int cur, OutputSet *outputs) {
   outputs->AddRange(ports[RandomInt(ports.size() - 1)], 0, gNumVCs - 1);
 }
 
+// HBM→MC (inject/first hop): prefer data VCs (pri=1); escape VC 0 (pri=0)
+// only as last resort so the flit does not start its fabric journey on VC 0.
+static void accel_add_hbm_to_mc_ports(int cur, OutputSet *outputs) {
+  vector<int> ports;
+  for (size_t i = 0; i < gHBMNetAccelAdj[cur].size(); i++) {
+    const AccelAdjEntry &e = gHBMNetAccelAdj[cur][i];
+    if (e.type == ACCEL_LINK_MC_HBM)
+      ports.push_back(e.port);
+  }
+  assert(!ports.empty());
+  int port = ports[RandomInt(ports.size() - 1)];
+  if (gNumVCs > 1)
+    outputs->AddRange(port, 1, gNumVCs - 1, 1);
+  outputs->AddRange(port, 0, 0, 0);
+}
+
+// ============================================================
+//  Common routing preamble (non-inject)
+//
+//  1. Eject at destination router
+//  2. Deterministic HBM→MC / MC→HBM hops for miss flits
+//  3. Escape VC (VC 0, Duato's protocol)
+//
+//  Returns true if routing is complete (eject or deterministic hop).
+//  Sets miss_target for caller's use in data VC routing.
+// ============================================================
 // ============================================================
 //  Common routing preamble (non-inject)
 //
@@ -1160,13 +1187,16 @@ static bool accelsim_routing_preamble(const Router *r, const Flit *f,
   cur_router  = r->GetID();
   dest_router = hbmnet_accelsim_node_to_router(f->dest);
 
-  // Eject at destination router
+  // 1. Eject at destination router
   if (cur_router == dest_router) {
     ++gAccelTotalEjects;
-    if (f->vc == 0) ++gAccelEscapeVCEjects;
-    // Track near-min path usage at ejection
     if (f->nm_used)
       ++gAccelNearMinPathsUsed;
+      
+    if (accel_is_xbar(cur_router) && f->vc == 0) {
+        ++gAccelEscapeVCEjects;
+    }
+    
     outputs->AddRange(accel_eject_port(f->dest), 0, gNumVCs - 1);
     return true;
   }
@@ -1177,13 +1207,18 @@ static bool accelsim_routing_preamble(const Router *r, const Flit *f,
   if (!is_hit) {
     // Deterministic HBM→MC hop (L2 miss injection first hop)
     if (accel_is_hbm(cur_router)) {
-      accel_add_mc_hbm_ports(cur_router, outputs);
+      accel_add_hbm_to_mc_ports(cur_router, outputs);
       return true;
     }
     // Deterministic MC→HBM hop (at dest MC, SM→L2 miss final hop)
     if (accel_is_mc(cur_router) && accel_is_mc(miss_target)
         && cur_router == miss_target) {
-      accel_add_mc_hbm_ports(cur_router, outputs);
+        
+      if (f->vc == 0) {
+          ++gAccelEscapeVCEjects;
+      }
+      
+      accel_add_mc_to_hbm_ports(cur_router, outputs);
       return true;
     }
   }
@@ -1207,7 +1242,11 @@ static bool accelsim_routing_preamble(const Router *r, const Flit *f,
     }
   }
   assert(!esc_ports.empty());
-  outputs->AddRange(esc_ports[RandomInt(esc_ports.size() - 1)], 0, 0, 0);
+  
+  if (f->vc == 0) {
+      outputs->AddRange(esc_ports[RandomInt(esc_ports.size() - 1)], 0, 0, 0);
+      return true;
+  }
 
   return false;
 }

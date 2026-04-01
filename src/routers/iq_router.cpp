@@ -601,9 +601,40 @@ void IQRouter::_VCAllocEvaluate( )
 
     assert(!_noq || (setlist.size() == 1));
 
+    // Pre-scan: find the highest priority level that has at least one
+    // available (and creditable) output VC.  When a higher-priority
+    // entry has usable VCs, lower-priority entries (escape VC) are
+    // not submitted to the allocator at all.  This is essential for
+    // allocators like iSLIP that ignore the priority field.
+    int max_avail_pri = numeric_limits<int>::min();
+    for(set<OutputSet::sSetElement>::const_iterator ps = setlist.begin();
+	ps != setlist.end(); ++ps) {
+      int const ps_port = ps->output_port;
+      if(ps_port < 0 || ps_port >= _outputs) continue;
+      BufferState const * const ps_buf = _next_buf[ps_port];
+      int ps_vs = ps->vc_start, ps_ve = ps->vc_end;
+      if(_noq && _noq_next_output_port[input][vc] >= 0) {
+	ps_vs = _noq_next_vc_start[input][vc];
+	ps_ve = _noq_next_vc_end[input][vc];
+      }
+      for(int ps_vc = ps_vs; ps_vc <= ps_ve; ++ps_vc) {
+	if(ps_buf->IsAvailableFor(ps_vc) &&
+	   !(_vc_busy_when_full && ps_buf->IsFullFor(ps_vc))) {
+	  if(ps->pri > max_avail_pri)
+	    max_avail_pri = ps->pri;
+	  break;
+	}
+      }
+    }
+
     for(set<OutputSet::sSetElement>::const_iterator iset = setlist.begin();
 	iset != setlist.end();
 	++iset) {
+
+      // Skip lower-priority entries when a higher-priority entry has
+      // at least one available VC (escape VC suppression for iSLIP).
+      if(iset->pri < max_avail_pri)
+	continue;
 
       int const out_port = iset->output_port;
       assert((out_port >= 0) && (out_port < _outputs));
