@@ -48,7 +48,7 @@ near_min_k = 1;
 // 0.0 = no penalty (always pick least congested), 1.0 = default, >1.0 = more conservative
 // +1 hop cost: sat + penalty * lat_norm * (1 + sat)
 // +2 hop cost: sat + 2 * penalty * lat_norm * (1 + sat)
-near_min_penalty = 1.0;
+near_min_penalty = 0.5;
 
 // Near-min strict mode: controls where non-min hops are allowed
 //   0 = relieved: non-min blocked only when cur partition is outside the natural
