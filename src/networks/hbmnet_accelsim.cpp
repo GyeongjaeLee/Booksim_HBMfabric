@@ -1018,6 +1018,24 @@ static double accel_avg_credit_toward(const Router *r, int cur, int target,
 }
 
 // ============================================================
+//  Pick random direction, random port within (oblivious)
+// ============================================================
+static int accel_pick_oblivious_port(const Router *r, int cur, int target,
+                                     bool is_hit,
+                                     const vector<vector<int>> &dist)
+{
+  map<int, vector<int>> dir_ports;
+  map<int, int> dir_credit;
+  accel_collect_minimal_dirs(r, cur, target, is_hit, dist, dir_ports, dir_credit);
+  assert(!dir_ports.empty());
+
+  map<int, vector<int>>::iterator it = dir_ports.begin();
+  advance(it, RandomInt(dir_ports.size() - 1));
+  vector<int> &ports = it->second;
+  return ports[RandomInt(ports.size() - 1)];
+}
+
+// ============================================================
 //  Pick least-congested direction, random port within
 // ============================================================
 static int accel_pick_adaptive_port(const Router *r, int cur, int target,
@@ -1883,11 +1901,8 @@ void hbmnet_accelsim_hybrid( const Router *r, const Flit *f, int in_channel,
 
     case 4:  // min_oblivious
     {
-      vector<int> ports;
-      accel_collect_minimal_ports(cur, miss_target, false,
-                                  gHBMNetAccelDistMissFabric, ports);
-      assert(!ports.empty());
-      port = ports[RandomInt(ports.size() - 1)];
+      port = accel_pick_oblivious_port(r, cur, miss_target, false,
+                                       gHBMNetAccelDistMissFabric);
       break;
     }
 
