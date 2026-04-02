@@ -552,19 +552,50 @@ int HotSpotTrafficPattern::dest(int source)
 GPUTrafficPattern::GPUTrafficPattern(int nodes, Configuration const * const config)
    : TrafficPattern(nodes)
 {
-  int P = config->GetInt("num_xbars");
-  int H = config->GetInt("hbm_per_side");
-  int K = P * H * 2;
-  _num_sms = config->GetInt("sm_per_xbar") * P;
-  _num_l2_slices = config->GetInt("l2_per_hbm") * K;
+  _P = config->GetInt("num_xbars");
+  _H = config->GetInt("hbm_per_side");
+  _K = _P * _H * 2;
+  _sm_per_xbar = config->GetInt("sm_per_xbar");
+  _l2_per_hbm = config->GetInt("l2_per_hbm");
+  _num_sms = _sm_per_xbar * _P;
+  _num_l2_slices = _l2_per_hbm * _K;
+
+  _remote_only = config->GetInt("remote_only");
 }
 
 int GPUTrafficPattern::dest(int source)
 {
-    // If source is an L2 slice, no requests are generated
-    if (source >= _num_sms) {
-      return -1; // Special value to indicate no request
+  if (source >= _num_sms) {
+      return -1;
+  }
+
+  if (_remote_only) {
+    // SM belongs to partition cur_partition (0..P-1).
+    // Select an L2 slice that does NOT belong to this partition.
+    //
+    // HBM stack h belongs to partition: (h % (K/2)) / H
+    // Each partition owns H*2 HBM stacks → H*2*_l2_per_hbm L2 slices.
+    // Remote L2 slices = total - local = _num_l2_slices - H*2*_l2_per_hbm.
+    int cur_partition = source / _sm_per_xbar;
+    int local_l2 = _H * 2 * _l2_per_hbm;
+    int remote_l2 = _num_l2_slices - local_l2;
+    assert(remote_l2 > 0);
+
+    // Pick a random index among remote L2 slices
+    int idx = RandomInt(remote_l2 - 1);
+
+    // Map idx to an actual L2 node by skipping local-partition slices
+    for (int h = 0; h < _K; h++) {
+      int part = (h % (_K / 2)) / _H;
+      if (part == cur_partition) continue;
+      if (idx < _l2_per_hbm)
+        return _num_sms + h * _l2_per_hbm + idx;
+      idx -= _l2_per_hbm;
     }
-    
+    assert(false);
+    return -1;
+  }
+  else {
     return _num_sms + RandomInt(_num_l2_slices - 1);
+  }
 }

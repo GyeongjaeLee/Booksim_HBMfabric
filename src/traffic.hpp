@@ -182,8 +182,15 @@ public:
 
 class GPUTrafficPattern : public TrafficPattern {
 private:
+  int _P;
+  int _H;
+  int _K;
+  int _sm_per_xbar;
+  int _l2_per_hbm;
   int _num_sms;
   int _num_l2_slices;
+
+  int _remote_only;
 public:
   GPUTrafficPattern(int nodes, Configuration const * const config);
   virtual int dest(int source);

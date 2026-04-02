@@ -104,18 +104,19 @@ hbm_internal_speedup = 10.0;
 
 // Traffic
 // only generate SM node -> L2 node random traffic
-traffic = uniform;
-injection_process = bernoulli;
+traffic = gpu;
+remote_only = 1;
+injection_process = gpu_bernoulli;
 packet_size = 1;
 
 use_read_write = 0;
 
-latency_thres = 20000.0;
+latency_thres = 500000.0;
 
 // Simulation
 sim_type = moe_accelsim;
 // sim_type = moe_accelsim;
-injection_rate = 0.8;
+injection_rate = 0.01;
 flit_width_bytes = 40;
 traffic_matrix_file = ./examples/remote_symmetric_4MiB.matrix;
 
