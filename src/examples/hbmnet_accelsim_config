@@ -5,10 +5,10 @@ topology = hbmnet_accelsim;
 // Topology: P Xbars in a chain, H HBM stacks per side per Xbar
 // Total HBM stacks K = P * H * 2
 // Derived: num_sms = sm_per_xbar * P,  num_l2_slices = l2_per_hbm * K
-sm_per_xbar = 74;     // SMs per Xbar (concentration)
-num_xbars = 2;        // P: number of Xbar routers (e.g. 1, 2, 4)
-hbm_per_side = 2;     // H: HBM stacks per side per Xbar (e.g. 1, 2, 3)
-l2_per_hbm = 32;      // L2 slices per HBM stack
+sm_per_xbar = 74;
+num_xbars = 2;
+hbm_per_side = 2;
+l2_per_hbm = 32;
 // P=2, H=2 → K=8, num_sms=148, num_l2=256
 l2_interleave = 0;
 
@@ -28,7 +28,7 @@ routing_function = hybrid;
 //   fixed_min  deterministic min, MC-MC fabric preferred over Xbar chain
 //   ugal              adaptive non-minimal via intermediate
 //   valiant           oblivious non-minimal via random intermediate
-hybrid_routing = baseline;
+hybrid_routing = fixed_min;
 
 is_fabric = 1;
 ugal_threshold = 50;
@@ -66,21 +66,21 @@ inject_latency = 50;
 eject_latency = 50;
 
 // Link latencies (cycles)
-xbar_xbar_latency = 185;
+xbar_xbar_latency = 150;
 xbar_hbm_latency = 30;    // hit path: Xbar ↔ HBM
-xbar_mc_latency = 115;      // miss path: Xbar ↔ MC
-mc_hbm_latency = 35;      // miss path: MC ↔ HBM (models DRAM access)
-mc_mc_latency = 85;         // miss path fabric: MC ↔ MC
+xbar_mc_latency = 150;
+mc_hbm_latency = 100;
+mc_mc_latency = 150;
 
 // Link bandwidths (parallel ports per link pair)
 xbar_xbar_bandwidth = 28;
 xbar_hbm_bandwidth = 8;   // hit path
-xbar_mc_bandwidth = 8;    // miss path entry
-mc_hbm_bandwidth = 13;     // equal xbar_hbm_bandwidth for fairness
-mc_mc_bandwidth = 8;       // fabric
+xbar_mc_bandwidth = 8;
+mc_hbm_bandwidth = 12;
+mc_mc_bandwidth = 10;
 
 // Flow control
-num_vcs     = 4;
+num_vcs = 4;
 vc_buf_size = 128;
 wait_for_tail_credit = 0;
 
@@ -104,20 +104,20 @@ hbm_internal_speedup = 10.0;
 
 // Traffic
 // only generate SM node -> L2 node random traffic
-traffic = gpu;
-injection_process = gpu_bernoulli;
+traffic = uniform;
+injection_process = bernoulli;
 packet_size = 1;
 
-use_read_write = 1;
+use_read_write = 0;
 
-latency_thres = 50000.0;
+latency_thres = 20000.0;
 
 // Simulation
-sim_type = latency;
+sim_type = moe_accelsim;
 // sim_type = moe_accelsim;
-injection_rate = 0.499979;
+injection_rate = 0.8;
 flit_width_bytes = 40;
-traffic_matrix_file = ./examples/end-to-end/moe_matrix_H2H_k16_128MiB;
+traffic_matrix_file = ./examples/remote_symmetric_4MiB.matrix;
 
 read_request_begin_vc = 0;
 read_request_end_vc = 3;
@@ -132,3 +132,4 @@ read_request_size = 1;
 read_reply_size = 1;
 write_request_size = 1;
 write_reply_size = 1;
+moe_total_mb = 4.0;

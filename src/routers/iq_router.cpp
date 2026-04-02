@@ -602,10 +602,12 @@ void IQRouter::_VCAllocEvaluate( )
     assert(!_noq || (setlist.size() == 1));
 
     // Pre-scan: find the highest priority level that has at least one
-    // available (and creditable) output VC.  When a higher-priority
-    // entry has usable VCs, lower-priority entries (escape VC) are
-    // not submitted to the allocator at all.  This is essential for
-    // allocators like iSLIP that ignore the priority field.
+    // output VC with buffer credits.  When a higher-priority entry
+    // has non-full VCs, lower-priority entries (escape VC) are not
+    // submitted to the allocator at all — the flit waits for a
+    // higher-priority VC to become free instead of escaping.
+    // This is essential for allocators like iSLIP that ignore the
+    // priority field.
     int max_avail_pri = numeric_limits<int>::min();
     for(set<OutputSet::sSetElement>::const_iterator ps = setlist.begin();
 	ps != setlist.end(); ++ps) {
@@ -618,8 +620,7 @@ void IQRouter::_VCAllocEvaluate( )
 	ps_ve = _noq_next_vc_end[input][vc];
       }
       for(int ps_vc = ps_vs; ps_vc <= ps_ve; ++ps_vc) {
-	if(ps_buf->IsAvailableFor(ps_vc) &&
-	   !(_vc_busy_when_full && ps_buf->IsFullFor(ps_vc))) {
+	if(!ps_buf->IsFullFor(ps_vc)) {
 	  if(ps->pri > max_avail_pri)
 	    max_avail_pri = ps->pri;
 	  break;

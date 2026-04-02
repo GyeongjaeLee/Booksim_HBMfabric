@@ -435,8 +435,7 @@ bool MoETrafficManagerAccelSim::_SingleSim()
     cout << "  Escape VC usage = " << gAccelEscapeVCEjects << " / " << gAccelTotalEjects
          << "  (" << pct << "%)" << endl;
   }
-  // Link utilization and near-min stats
-  hbmnet_accelsim_print_link_stats();
+
   cout << "======================================" << endl;
 
   // === Per-router traffic analysis ===

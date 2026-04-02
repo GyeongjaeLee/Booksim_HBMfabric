@@ -1248,6 +1248,9 @@ static bool accelsim_routing_preamble(const Router *r, const Flit *f,
       return true;
   }
 
+  // Add escape VC as low-priority fallback for data flits (Duato's protocol).
+  // iq_router suppresses pri=0 when pri=1 data VCs are available.
+  outputs->AddRange(esc_ports[RandomInt(esc_ports.size() - 1)], 0, 0, 0);
   return false;
 }
 
