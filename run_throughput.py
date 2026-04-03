@@ -144,7 +144,10 @@ def bw_overrides(name: str) -> dict:
 def run_booksim_throughput(booksim: str, config_path: str) -> dict:
     proc = subprocess.run([booksim, config_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     out = proc.stdout
-    if proc.returncode != 0: return {"Error": f"Failed with code {proc.returncode}"}
+    # booksim main() returns -1 (→ exit code 255) on successful convergence and 0 when
+    # the simulation is unstable / did not converge; both are valid run outcomes.
+    # Only a negative returncode (signal-based crash, e.g. SIGABRT=-6) is a hard failure.
+    if proc.returncode < 0: return {"Error": f"Failed with code {proc.returncode}"}
     
     lats = re.findall(r"Packet latency average = ([\d.]+)", out)
     accs = re.findall(r"Accepted packet rate average = ([\d.]+)", out)
@@ -157,7 +160,7 @@ def run_booksim_throughput(booksim: str, config_path: str) -> dict:
 def _run_sweep_worker(exp: dict, args, i: int, n: int) -> dict:
     struct, bw, rk = exp["structure"], exp["bandwidth"], exp["routing_key"]
     tag = f"[{i:2d}/{n}] {struct} / {bw} / {rk}"
-    out_dir = os.path.join(args.result_dir, struct, bw, args.traffic_label, rk)
+    out_dir = os.path.join(args.result_dir, args.traffic_label, struct, bw, rk)
     out_csv = os.path.join(out_dir, "throughput_sweep.csv")
 
     if args.skip_existing and os.path.exists(out_csv):
@@ -253,9 +256,16 @@ def cmd_run(args):
 # ── Plotter ───────────────────────────────────────────────────────────────────
 
 METRIC_CONFIG = {
-    "throughput":  {"x": "Injection_Rate", "y": "Accepted_Rate", "xlab": "Injection Rate (flits/node/cycle)", "ylab": "Accepted Rate", "title": "Throughput vs Injection Rate"},
-    "latency":     {"x": "Injection_Rate", "y": "Latency",       "xlab": "Injection Rate (flits/node/cycle)", "ylab": "Latency (cycles)", "title": "Latency vs Injection Rate"},
-    "acc_latency": {"x": "Accepted_Rate",  "y": "Latency",       "xlab": "Accepted Rate (flits/node/cycle)",  "ylab": "Latency (cycles)", "title": "Latency vs Accepted Rate"},
+    "throughput":  {
+        "x": "Injection_Rate",
+        "y": "Accepted_Rate",
+        "xlab": "Injection Rate",
+        "ylab": "Accepted Rate",
+        "title": "All Nodes - All Nodes",
+        "subtitle": "(Rubin Ultra)"
+    },
+    "latency":     {"x": "Injection_Rate", "y": "Latency",       "xlab": "Injection Rate", "ylab": "Latency (cycles)", "title": "Latency vs Injection Rate"},
+    "acc_latency": {"x": "Accepted_Rate",  "y": "Latency",       "xlab": "Accepted Rate",  "ylab": "Latency (cycles)", "title": "Latency vs Accepted Rate"},
 }
 
 def parse_csv_file(filepath: str, x_col: str, y_col: str):
@@ -299,7 +309,7 @@ def cmd_plot(args):
     for struct in structures:
         for bw in bandwidths:
             for rk in routing_keys:
-                csv_path = os.path.join(args.result_dir, struct, bw, args.traffic_label, rk, "throughput_sweep.csv")
+                csv_path = os.path.join(args.result_dir, args.traffic_label, struct, bw, rk, "throughput_sweep.csv")
                 if not os.path.exists(csv_path):
                     print(f"[skip] not found: {csv_path}")
                     continue
@@ -330,10 +340,14 @@ def cmd_plot(args):
         ax.plot(xs, ys, color=cmap(i % 20), linestyle=linestyles[i % len(linestyles)],
                 marker=markers[i % len(markers)], markersize=5, linewidth=1.5, label=entry["label"])
 
-    ax.set_xlabel(mcfg["xlab"], fontsize=12)
-    ax.set_ylabel(mcfg["ylab"], fontsize=12)
-    ax.set_title(mcfg["title"], fontsize=13)
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.9, ncol=1 if len(entries) <= 10 else 2)
+    ax.set_xlabel(mcfg["xlab"], fontsize=15, fontweight='bold')
+    ax.set_ylabel(mcfg["ylab"], fontsize=15, fontweight='bold')
+    ax.set_title(mcfg["title"], fontsize=15, fontweight='bold', pad=20)
+    ax.text(0.5, 1.01, mcfg["subtitle"], 
+            transform=ax.transAxes, 
+            ha='center', va='bottom', 
+            fontsize=12, fontweight='bold')
+    ax.legend(loc="upper left", fontsize=8, framealpha=0.9, ncol=1 if len(entries) <= 10 else 2)
     ax.grid(True, alpha=0.3)
     ax.set_xlim(0, max([np.max(parse_csv_file(e["path"], mcfg["x"], mcfg["y"])[0]) for e in entries]) * 1.05)
     

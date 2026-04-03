@@ -104,17 +104,17 @@ hbm_internal_speedup = 10.0;
 
 // Traffic
 // only generate SM node -> L2 node random traffic
-traffic = gpu;
-remote_only = 1;
-injection_process = gpu_bernoulli;
+traffic = uniform;
+remote_only = 0;
+injection_process = bernoulli;
 packet_size = 1;
 
-use_read_write = 0;
+use_read_write = 1;
 
 latency_thres = 500000.0;
 
 // Simulation
-sim_type = moe_accelsim;
+sim_type = throughput;
 // sim_type = moe_accelsim;
 injection_rate = 0.01;
 flit_width_bytes = 40;
