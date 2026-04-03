@@ -560,31 +560,30 @@ GPUTrafficPattern::GPUTrafficPattern(int nodes, Configuration const * const conf
   _num_sms = _sm_per_xbar * _P;
   _num_l2_slices = _l2_per_hbm * _K;
 
-  _remote_only = config->GetInt("remote_only");
+  // gpu_traffic_type overrides legacy remote_only if set
+  _gpu_traffic_type = config->GetInt("gpu_traffic_type");
+  if (_gpu_traffic_type == 0) {
+    // Backward compat: fall back to remote_only if gpu_traffic_type wasn't explicitly set
+    int ro = config->GetInt("remote_only");
+    if (ro) _gpu_traffic_type = 1;
+  }
 }
 
 int GPUTrafficPattern::dest(int source)
 {
-  if (source >= _num_sms) {
-      return -1;
-  }
+  switch (_gpu_traffic_type) {
+  case 1: {
+    // Remote-only: SM → L2 slices in other partitions only
+    // (L2 nodes do not inject in this mode)
+    if (source >= _num_sms) return -1;
 
-  if (_remote_only) {
-    // SM belongs to partition cur_partition (0..P-1).
-    // Select an L2 slice that does NOT belong to this partition.
-    //
-    // HBM stack h belongs to partition: (h % (K/2)) / H
-    // Each partition owns H*2 HBM stacks → H*2*_l2_per_hbm L2 slices.
-    // Remote L2 slices = total - local = _num_l2_slices - H*2*_l2_per_hbm.
     int cur_partition = source / _sm_per_xbar;
     int local_l2 = _H * 2 * _l2_per_hbm;
     int remote_l2 = _num_l2_slices - local_l2;
     assert(remote_l2 > 0);
 
-    // Pick a random index among remote L2 slices
     int idx = RandomInt(remote_l2 - 1);
 
-    // Map idx to an actual L2 node by skipping local-partition slices
     for (int h = 0; h < _K; h++) {
       int part = (h % (_K / 2)) / _H;
       if (part == cur_partition) continue;
@@ -595,7 +594,41 @@ int GPUTrafficPattern::dest(int source)
     assert(false);
     return -1;
   }
-  else {
+  case 2: {
+    // All-to-all: any node (SM or L2) → any node NOT on the same router
+    //
+    // SM source (source < _num_sms):
+    //   Router = Xbar (source / _sm_per_xbar), concentration = _sm_per_xbar
+    //   First node on same router = (source / _sm_per_xbar) * _sm_per_xbar
+    //
+    // L2 source (source >= _num_sms):
+    //   HBM stack h = (source - _num_sms) / _l2_per_hbm, concentration = _l2_per_hbm
+    //   First node on same router = _num_sms + h * _l2_per_hbm
+    int src_router_conc, src_router_first;
+    if (source < _num_sms) {
+      src_router_conc  = _sm_per_xbar;
+      src_router_first = (source / _sm_per_xbar) * _sm_per_xbar;
+    } else {
+      src_router_conc  = _l2_per_hbm;
+      int h = (source - _num_sms) / _l2_per_hbm;
+      src_router_first = _num_sms + h * _l2_per_hbm;
+    }
+
+    int eligible = _nodes - src_router_conc;
+    assert(eligible > 0);
+
+    int idx = RandomInt(eligible - 1);
+
+    // Map idx to actual node, skipping nodes on the source's router
+    if (idx < src_router_first) {
+      return idx;
+    }
+    return idx + src_router_conc;
+  }
+  default:
+    // Type 0: uniform SM → any L2 slice
+    // (L2 nodes do not inject in this mode)
+    if (source >= _num_sms) return -1;
     return _num_sms + RandomInt(_num_l2_slices - 1);
   }
 }

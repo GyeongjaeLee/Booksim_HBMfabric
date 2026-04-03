@@ -105,7 +105,8 @@ hbm_internal_speedup = 10.0;
 // Traffic
 // only generate SM node -> L2 node random traffic
 traffic = uniform;
-remote_only = 0;
+// gpu_traffic_type: 0=uniform SM→L2, 1=remote-only SM→L2, 2=all (exclude same-router)
+gpu_traffic_type = 0;
 injection_process = bernoulli;
 packet_size = 1;
 
@@ -127,7 +128,7 @@ read_reply_end_vc = 3;
 write_request_begin_vc = 0;
 write_request_end_vc = 3;
 write_reply_begin_vc = 0;
-write_reply_begin_vc = 3;
+write_reply_end_vc = 3;
 
 read_request_size = 1;
 read_reply_size = 1;

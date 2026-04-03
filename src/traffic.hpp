@@ -190,7 +190,7 @@ private:
   int _num_sms;
   int _num_l2_slices;
 
-  int _remote_only;
+  int _gpu_traffic_type;  // 0=uniform SM→L2, 1=remote-partition SM→L2, 2=all (exclude same-router)
 public:
   GPUTrafficPattern(int nodes, Configuration const * const config);
   virtual int dest(int source);

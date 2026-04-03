@@ -154,8 +154,8 @@ def run_booksim_throughput(booksim: str, config_path: str) -> dict:
     times = re.findall(r"Time taken is (\d+) cycles", out)
     
     if accs and lats and times:
-        return {"Accepted_Rate": float(accs[-1]), "Latency": float(lats[-1]), "Time_Cycles": int(times[-1]), "Error": None}
-    return {"Error": "Failed to parse metrics"}
+        return {"Accepted_Rate": float(accs[-1]), "Latency": float(lats[-1]), "Time_Cycles": int(times[-1]), "Error": None, "log": out}
+    return {"Error": "Failed to parse metrics", "log": out}
 
 def _run_sweep_worker(exp: dict, args, i: int, n: int) -> dict:
     struct, bw, rk = exp["structure"], exp["bandwidth"], exp["routing_key"]
@@ -177,6 +177,8 @@ def _run_sweep_worker(exp: dict, args, i: int, n: int) -> dict:
         "injection_process": args.injection_process,
         "use_read_write": "1" if args.use_read_write else "0"
     })
+    if args.gpu_traffic_type is not None:
+        overrides["gpu_traffic_type"] = str(args.gpu_traffic_type)
     for kv in (args.override or []):
         k, _, v = kv.partition("=")
         overrides[k.strip()] = v.strip()
@@ -186,31 +188,38 @@ def _run_sweep_worker(exp: dict, args, i: int, n: int) -> dict:
 
     os.makedirs(out_dir, exist_ok=True)
     results_list = []
-    
-    # Internal Sweep Loop
-    curr_rate = args.initial_step
-    while curr_rate <= args.max_rate + 1e-9:
-        overrides["injection_rate"] = f"{curr_rate:.4f}"
-        
-        with tempfile.NamedTemporaryFile(suffix=".cfg", delete=False) as tmp:
-            tmp_name = tmp.name
-        
-        try:
-            generate_config(args.base_config, overrides, tmp_name)
-            bs_res = run_booksim_throughput(args.booksim, tmp_name)
-        finally:
-            if os.path.exists(tmp_name): os.remove(tmp_name)
+    out_log = os.path.join(out_dir, "throughput_sweep.log")
 
-        if bs_res["Error"]:
-            return {"status": "failed", "msg": f"{tag} → [ERROR at inj={curr_rate:.4f}] {bs_res['Error']}"}
-        
-        results_list.append({
-            "Injection_Rate": curr_rate,
-            "Accepted_Rate": bs_res["Accepted_Rate"],
-            "Latency": bs_res["Latency"],
-            "Time_Cycles": bs_res["Time_Cycles"]
-        })
-        curr_rate += args.minimum_step
+    with open(out_log, 'w') as log_f:
+        # Internal Sweep Loop
+        curr_rate = args.initial_step
+        while curr_rate <= args.max_rate + 1e-9:
+            overrides["injection_rate"] = f"{curr_rate:.4f}"
+
+            with tempfile.NamedTemporaryFile(suffix=".cfg", delete=False) as tmp:
+                tmp_name = tmp.name
+
+            try:
+                generate_config(args.base_config, overrides, tmp_name)
+                bs_res = run_booksim_throughput(args.booksim, tmp_name)
+            finally:
+                if os.path.exists(tmp_name): os.remove(tmp_name)
+
+            log_f.write(f"{'='*60}\n")
+            log_f.write(f"OVERRIDE Parameter: injection_rate={curr_rate:.4f}\n")
+            log_f.write(bs_res.get("log", ""))
+            log_f.write("\n")
+
+            if bs_res["Error"]:
+                return {"status": "failed", "msg": f"{tag} → [ERROR at inj={curr_rate:.4f}] {bs_res['Error']}"}
+
+            results_list.append({
+                "Injection_Rate": curr_rate,
+                "Accepted_Rate": bs_res["Accepted_Rate"],
+                "Latency": bs_res["Latency"],
+                "Time_Cycles": bs_res["Time_Cycles"]
+            })
+            curr_rate += args.minimum_step
 
     # Save to CSV
     keys = ["Injection_Rate", "Accepted_Rate", "Latency", "Time_Cycles"]
@@ -379,6 +388,9 @@ def main():
     p.add_argument("--minimum-step", type=float, default=0.05, help="Sweep step size (default: 0.05)")
     p.add_argument("--max-rate", type=float, default=1.0, help="Max injection rate (default: 1.0)")
     
+    p.add_argument("--gpu-traffic-type", type=int, default=None, choices=[0, 1, 2],
+                   help="gpu_traffic_type: 0=SM→L2 uniform, 1=SM→remote L2, 2=all-to-all "
+                        "(auto-sets traffic=gpu and injection_process)")
     p.add_argument("--traffic", default="gpu")
     p.add_argument("--injection-process", default="gpu_bernoulli")
     p.add_argument("--traffic-label", default=None)
@@ -400,7 +412,9 @@ def main():
     q.add_argument("--routing", nargs="+", required=True)
     q.add_argument("--near-min-k", nargs="+", type=int, default=[2])
     q.add_argument("--near-min-p", nargs="+", type=float, default=[1.0])
-    q.add_argument("--traffic-label", default="gpu")
+    q.add_argument("--gpu-traffic-type", type=int, default=None, choices=[0, 1, 2],
+                   help="Resolve traffic label from type: 0=GPU-HBM, 1=Remote, 2=All")
+    q.add_argument("--traffic-label", default=None)
     q.add_argument("--use-read-write", action="store_true")
     q.add_argument("--result-dir", default=RESULT_DIR)
     q.add_argument("--metric", default="throughput", choices=list(METRIC_CONFIG.keys()))
@@ -410,11 +424,22 @@ def main():
 
     args = parser.parse_args()
 
-    if getattr(args, 'traffic_label', None) is None or args.traffic_label == "gpu":
+    # --gpu-traffic-type auto-sets traffic, injection_process, and default label
+    _GPU_TYPE_LABELS = {0: "GPU-HBM", 1: "Remote", 2: "All"}
+    if args.cmd == "run" and getattr(args, 'gpu_traffic_type', None) is not None:
+        args.traffic = "gpu"
+        args.injection_process = "bernoulli" if args.gpu_traffic_type == 2 else "gpu_bernoulli"
+        if getattr(args, 'traffic_label', None) is None:
+            args.traffic_label = _GPU_TYPE_LABELS[args.gpu_traffic_type]
+
+    gtt = getattr(args, 'gpu_traffic_type', None)
+    if gtt is not None and args.traffic_label is None:
+        args.traffic_label = _GPU_TYPE_LABELS[gtt]
+    if args.traffic_label is None:
         if getattr(args, 'use_read_write', False):
             args.traffic_label = "gpu_rw"
-        elif getattr(args, 'traffic_label', None) is None:
-            args.traffic_label = args.traffic
+        else:
+            args.traffic_label = getattr(args, 'traffic', 'gpu')
 
     if args.cmd == "run": cmd_run(args)
     else: cmd_plot(args)

@@ -298,6 +298,10 @@ def _run_one(exp: dict, args, i: int, n: int) -> dict:
     # Read/Write config injection
     overrides["use_read_write"]    = "1" if args.use_read_write else "0"
 
+    # GPU traffic type override
+    if args.gpu_traffic_type is not None:
+        overrides["gpu_traffic_type"] = str(args.gpu_traffic_type)
+
     for kv in (args.override or []):
         k, _, v = kv.partition("=")
         overrides[k.strip()] = v.strip()
@@ -561,6 +565,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--near-min-p", nargs="+", type=float, default=[1.0],
                    metavar="P",
                    help="near_min_penalty multiplier values for near_min_adaptive only (default: 1.0)")
+    p.add_argument("--gpu-traffic-type", type=int, default=None, choices=[0, 1, 2],
+                   metavar="TYPE",
+                   help="gpu_traffic_type: 0=SM→L2 uniform, 1=SM→remote L2, 2=all-to-all "
+                        "(auto-sets traffic=gpu and injection_process)")
     p.add_argument("--traffic", default="gpu",
                    help="booksim traffic= value  (default: gpu)")
     p.add_argument("--injection-process", default="gpu_bernoulli",
@@ -605,8 +613,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Structure(s) to include (default: all available)")
     q.add_argument("--bandwidth", nargs="+", metavar="BW",
                    help="Bandwidth(s) to include (default: all available)")
-    q.add_argument("--traffic-label", default="gpu", metavar="LABEL",
-                   help="Traffic label directory (default: gpu or gpu_rw based on --use-read-write)")
+    q.add_argument("--gpu-traffic-type", type=int, default=None, choices=[0, 1, 2],
+                   metavar="TYPE",
+                   help="Resolve traffic label from type: 0=GPU-HBM, 1=Remote, 2=All")
+    q.add_argument("--traffic-label", default=None, metavar="LABEL",
+                   help="Traffic label directory (default: derived from --gpu-traffic-type, or 'gpu')")
     q.add_argument("--use-read-write", action="store_true",
                    help="Look for the _rw traffic-label suffix automatically")
     q.add_argument("--routing", nargs="+", metavar="KEY",
@@ -642,15 +653,26 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    # --gpu-traffic-type auto-sets traffic, injection_process, and default label
+    _GPU_TYPE_LABELS = {0: "GPU-HBM", 1: "Remote", 2: "All"}
+    if args.cmd == "run" and getattr(args, 'gpu_traffic_type', None) is not None:
+        args.traffic = "gpu"
+        args.injection_process = "bernoulli" if args.gpu_traffic_type == 2 else "gpu_bernoulli"
+        if args.traffic_label is None:
+            args.traffic_label = _GPU_TYPE_LABELS[args.gpu_traffic_type]
+
     # Automatically set traffic labels based on read/write status
     if args.cmd == "run" and getattr(args, 'traffic_label', None) is None:
         args.traffic_label = args.traffic
         if args.use_read_write:
             args.traffic_label += "_rw"
             
-    if args.cmd == "plot" and getattr(args, 'traffic_label', "gpu") == "gpu":
-        if getattr(args, 'use_read_write', False):
-            args.traffic_label = "gpu_rw"
+    if args.cmd == "plot":
+        gtt = getattr(args, 'gpu_traffic_type', None)
+        if gtt is not None and args.traffic_label is None:
+            args.traffic_label = _GPU_TYPE_LABELS[gtt]
+        if args.traffic_label is None:
+            args.traffic_label = "gpu_rw" if getattr(args, 'use_read_write', False) else "gpu"
 
     if args.cmd == "run":
         cmd_run(args)

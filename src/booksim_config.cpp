@@ -355,6 +355,7 @@ BookSimConfig::BookSimConfig( )
 
   // MoE traffic manager
   _int_map["remote_only"] = 0;
+  _int_map["gpu_traffic_type"] = 0;  // 0=uniform SM→L2, 1=remote-only SM→L2, 2=all (exclude same-router)
   _int_map["flit_width_bytes"] = 40;
   _float_map["moe_total_mb"] = 1.0;
   _str_map["traffic_matrix_file"] = "./examples/moe_matrix.txt";
