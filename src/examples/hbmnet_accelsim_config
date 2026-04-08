@@ -80,8 +80,8 @@ mc_hbm_bandwidth = 12;
 mc_mc_bandwidth = 10;
 
 // Flow control
-num_vcs = 4;
-vc_buf_size = 128;
+num_vcs = 2;
+vc_buf_size = 310;
 wait_for_tail_credit = 0;
 
 // Router architecture
