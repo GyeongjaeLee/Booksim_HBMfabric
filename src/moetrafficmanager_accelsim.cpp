@@ -418,17 +418,6 @@ bool MoETrafficManagerAccelSim::_SingleSim()
     cout << "  Avg network latency = " << _nlat_stats[0]->Average() << endl;
     cout << "  Avg hops = " << _hop_stats[0]->Average() << endl;
   }
-  // UGAL decision stats
-  {
-    long long total_ugal = gAccelUGALMinDecisions + gAccelUGALNonMinDecisions;
-    if (total_ugal > 0) {
-      double nonmin_pct = 100.0 * (double)gAccelUGALNonMinDecisions / (double)total_ugal;
-      cout << "  UGAL decisions: total=" << total_ugal
-           << "  min=" << gAccelUGALMinDecisions
-           << "  non-min=" << gAccelUGALNonMinDecisions
-           << "  non-min ratio=" << nonmin_pct << "%" << endl;
-    }
-  }
   // Escape VC usage
   if (gAccelTotalEjects > 0) {
     double pct = 100.0 * (double)gAccelEscapeVCEjects / (double)gAccelTotalEjects;

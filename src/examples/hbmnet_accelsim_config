@@ -81,7 +81,7 @@ mc_mc_bandwidth = 10;
 
 // Flow control
 num_vcs = 2;
-vc_buf_size = 310;
+vc_buf_size = 384;
 wait_for_tail_credit = 0;
 
 // Router architecture
@@ -115,9 +115,9 @@ use_read_write = 1;
 latency_thres = 500000.0;
 
 // Simulation
-sim_type = throughput;
+sim_type = latency;
 // sim_type = moe_accelsim;
-injection_rate = 0.01;
+injection_rate = 0.3;
 flit_width_bytes = 40;
 traffic_matrix_file = ./examples/remote_symmetric_4MiB.matrix;
 

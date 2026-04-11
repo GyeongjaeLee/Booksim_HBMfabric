@@ -164,6 +164,7 @@ public:
   void Display( ostream & os = cout ) const;
 
   virtual int GetUsedCredit(int o) const;
+  virtual int GetUsedCreditVC(int o, int vc) const;
   virtual int GetBufferOccupancy(int i) const;
 
 #ifdef TRACK_BUFFERS

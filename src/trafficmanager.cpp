@@ -1275,6 +1275,7 @@ void TrafficManager::_Step( )
 
     ++_time;
     assert(_time);
+    if (gHBMNetAccelK > 0) hbmnet_accelsim_tick();
     if(gTrace){
         cout<<"TIME "<<_time<<endl;
     }
